@@ -61,7 +61,7 @@ func (r *apiGatewayReconciler) Reconcile(ctx context.Context, req controller.Req
 		return reconcileEntry(r.fsm.State(), r.logger, ctx, req, r.reconcileHTTPRoute, r.cleanupRoute)
 	case structs.TCPRoute:
 		return reconcileEntry(r.fsm.State(), r.logger, ctx, req, r.reconcileTCPRoute, r.cleanupRoute)
-	case structs.InlineCertificate:
+	case structs.InlineCertificate, structs.FileSystemCertificate:
 		return r.enqueueCertificateReferencedGateways(r.fsm.State(), ctx, req)
 	case structs.JWTProvider:
 		return r.enqueueJWTProviderReferencedGatewaysAndHTTPRoutes(r.fsm.State(), ctx, req)
@@ -540,7 +540,8 @@ func NewAPIGatewayController(fsm *fsm.FSM, publisher state.EventPublisher, updat
 		logger:  logger,
 		updater: updater,
 	}
-	reconciler.controller = controller.New(publisher, reconciler)
+	reconciler.controller = controller.New(publisher, reconciler).
+		WithLogger(logger.With("controller", "apiGatewayController"))
 	return reconciler.controller.Subscribe(
 		&stream.SubscribeRequest{
 			Topic:   state.EventTopicAPIGateway,
@@ -624,6 +625,7 @@ func getAllGatewayMeta(store *state.Store) ([]*gatewayMeta, error) {
 	meta := make([]*gatewayMeta, 0, len(boundGateways))
 	for _, b := range boundGateways {
 		bound := b.(*structs.BoundAPIGatewayConfigEntry)
+		bound = bound.DeepCopy()
 		for _, g := range gateways {
 			gateway := g.(*structs.APIGatewayConfigEntry)
 			if bound.IsInitializedForGateway(gateway) {
@@ -667,6 +669,10 @@ func (g *gatewayMeta) updateRouteBinding(route structs.BoundRoute) (bool, []stru
 		return nil
 	})
 
+	if g.BoundGateway.Services == nil {
+		g.BoundGateway.Services = make(structs.ServiceRouteReferences)
+	}
+
 	// now try and bind all of the route's current refs
 	for _, ref := range route.GetParents() {
 		if !g.shouldBindRoute(ref) {
@@ -708,6 +714,9 @@ func (g *gatewayMeta) updateRouteBinding(route structs.BoundRoute) (bool, []stru
 		}
 
 		if refDidBind {
+			for _, serviceName := range route.GetServiceNames() {
+				g.BoundGateway.Services.AddService(structs.NewServiceName(serviceName.Name, &serviceName.EnterpriseMeta), routeRef)
+			}
 			boundRefs = append(boundRefs, ref)
 		}
 	}
@@ -1138,6 +1147,7 @@ func removeRoute(route structs.ResourceReference, entries ...*gatewayMeta) []*ga
 	for _, entry := range entries {
 		if entry.unbindRoute(route) {
 			modified = append(modified, entry)
+			entry.BoundGateway.Services.RemoveRouteRef(route)
 		}
 	}
 

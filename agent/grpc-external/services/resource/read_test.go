@@ -1,7 +1,7 @@
 // Copyright (c) HashiCorp, Inc.
 // SPDX-License-Identifier: BUSL-1.1
 
-package resource
+package resource_test
 
 import (
 	"context"
@@ -19,21 +19,21 @@ import (
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/acl/resolver"
+	svc "github.com/hashicorp/consul/agent/grpc-external/services/resource"
+	svctest "github.com/hashicorp/consul/agent/grpc-external/services/resource/testing"
 	"github.com/hashicorp/consul/agent/grpc-external/testutils"
 	"github.com/hashicorp/consul/internal/resource"
 	"github.com/hashicorp/consul/internal/resource/demo"
 	"github.com/hashicorp/consul/internal/storage"
-	"github.com/hashicorp/consul/internal/tenancy"
 	"github.com/hashicorp/consul/proto-public/pbresource"
 	"github.com/hashicorp/consul/proto/private/prototest"
 	"github.com/hashicorp/consul/sdk/testutil"
 )
 
 func TestRead_InputValidation(t *testing.T) {
-	server := testServer(t)
-	client := testClient(t, server)
-	tenancy.RegisterTypes(server.Registry)
-	demo.RegisterTypes(server.Registry)
+	client := svctest.NewResourceServiceBuilder().
+		WithRegisterFns(demo.RegisterTypes).
+		Run(t)
 
 	type testCase struct {
 		modFn       func(artistId, recordlabelId, executiveId *pbresource.ID) *pbresource.ID
@@ -148,7 +148,7 @@ func TestRead_InputValidation(t *testing.T) {
 }
 
 func TestRead_TypeNotFound(t *testing.T) {
-	server := NewServer(Config{Registry: resource.NewRegistry()})
+	server := svc.NewServer(svc.Config{Registry: resource.NewRegistry()})
 	client := testClient(t, server)
 
 	artist, err := demo.GenerateV2Artist()
@@ -160,85 +160,17 @@ func TestRead_TypeNotFound(t *testing.T) {
 	require.Contains(t, err.Error(), "resource type demo.v2.Artist not registered")
 }
 
-func TestRead_ResourceNotFound(t *testing.T) {
-	for desc, tc := range readTestCases() {
-		t.Run(desc, func(t *testing.T) {
-			type tenancyCase struct {
-				modFn       func(artistId, recordlabelId *pbresource.ID) *pbresource.ID
-				errContains string
-			}
-			tenancyCases := map[string]tenancyCase{
-				"resource not found by name": {
-					modFn: func(artistId, _ *pbresource.ID) *pbresource.ID {
-						artistId.Name = "bogusname"
-						return artistId
-					},
-					errContains: "resource not found",
-				},
-				"partition not found when namespace scoped": {
-					modFn: func(artistId, _ *pbresource.ID) *pbresource.ID {
-						id := clone(artistId)
-						id.Tenancy.Partition = "boguspartition"
-						return id
-					},
-					errContains: "partition not found",
-				},
-				"namespace not found when namespace scoped": {
-					modFn: func(artistId, _ *pbresource.ID) *pbresource.ID {
-						id := clone(artistId)
-						id.Tenancy.Namespace = "bogusnamespace"
-						return id
-					},
-					errContains: "namespace not found",
-				},
-				"partition not found when partition scoped": {
-					modFn: func(_, recordLabelId *pbresource.ID) *pbresource.ID {
-						id := clone(recordLabelId)
-						id.Tenancy.Partition = "boguspartition"
-						return id
-					},
-					errContains: "partition not found",
-				},
-			}
-			for tenancyDesc, tenancyCase := range tenancyCases {
-				t.Run(tenancyDesc, func(t *testing.T) {
-					server := testServer(t)
-					demo.RegisterTypes(server.Registry)
-					client := testClient(t, server)
-
-					recordLabel, err := demo.GenerateV1RecordLabel("looney-tunes")
-					require.NoError(t, err)
-					recordLabel, err = server.Backend.WriteCAS(tc.ctx, recordLabel)
-					require.NoError(t, err)
-
-					artist, err := demo.GenerateV2Artist()
-					require.NoError(t, err)
-					artist, err = server.Backend.WriteCAS(tc.ctx, artist)
-					require.NoError(t, err)
-
-					// Each tenancy test case picks which resource to use based on the resource type's scope.
-					_, err = client.Read(tc.ctx, &pbresource.ReadRequest{Id: tenancyCase.modFn(artist.Id, recordLabel.Id)})
-					require.Error(t, err)
-					require.Equal(t, codes.NotFound.String(), status.Code(err).String())
-					require.ErrorContains(t, err, tenancyCase.errContains)
-				})
-			}
-		})
-	}
-}
-
 func TestRead_GroupVersionMismatch(t *testing.T) {
 	for desc, tc := range readTestCases() {
 		t.Run(desc, func(t *testing.T) {
-			server := testServer(t)
-
-			demo.RegisterTypes(server.Registry)
-			client := testClient(t, server)
+			client := svctest.NewResourceServiceBuilder().
+				WithRegisterFns(demo.RegisterTypes).
+				Run(t)
 
 			artist, err := demo.GenerateV2Artist()
 			require.NoError(t, err)
 
-			_, err = server.Backend.WriteCAS(tc.ctx, artist)
+			_, err = client.Write(tc.ctx, &pbresource.WriteRequest{Resource: artist})
 			require.NoError(t, err)
 
 			id := clone(artist.Id)
@@ -257,18 +189,20 @@ func TestRead_Success(t *testing.T) {
 		t.Run(desc, func(t *testing.T) {
 			for tenancyDesc, modFn := range tenancyCases() {
 				t.Run(tenancyDesc, func(t *testing.T) {
-					server := testServer(t)
-					demo.RegisterTypes(server.Registry)
-					client := testClient(t, server)
+					client := svctest.NewResourceServiceBuilder().
+						WithRegisterFns(demo.RegisterTypes).
+						Run(t)
 
 					recordLabel, err := demo.GenerateV1RecordLabel("looney-tunes")
 					require.NoError(t, err)
-					recordLabel, err = server.Backend.WriteCAS(tc.ctx, recordLabel)
+					rsp1, err := client.Write(tc.ctx, &pbresource.WriteRequest{Resource: recordLabel})
+					recordLabel = rsp1.Resource
 					require.NoError(t, err)
 
 					artist, err := demo.GenerateV2Artist()
 					require.NoError(t, err)
-					artist, err = server.Backend.WriteCAS(tc.ctx, artist)
+					rsp2, err := client.Write(tc.ctx, &pbresource.WriteRequest{Resource: artist})
+					artist = rsp2.Resource
 					require.NoError(t, err)
 
 					// Each tenancy test case picks which resource to use based on the resource type's scope.
@@ -295,7 +229,7 @@ func TestRead_VerifyReadConsistencyArg(t *testing.T) {
 	for desc, tc := range readTestCases() {
 		t.Run(desc, func(t *testing.T) {
 			server := testServer(t)
-			mockBackend := NewMockBackend(t)
+			mockBackend := svc.NewMockBackend(t)
 			server.Backend = mockBackend
 			demo.RegisterTypes(server.Registry)
 
@@ -364,15 +298,14 @@ func TestRead_ACLs(t *testing.T) {
 
 	for desc, tc := range testcases {
 		t.Run(desc, func(t *testing.T) {
-			server := testServer(t)
-			client := testClient(t, server)
-
 			dr := &dummyACLResolver{
 				result: testutils.ACLsDisabled(t),
 			}
-			server.ACLResolver = dr
 
-			demo.RegisterTypes(server.Registry)
+			client := svctest.NewResourceServiceBuilder().
+				WithRegisterFns(demo.RegisterTypes).
+				WithACLResolver(dr).
+				Run(t)
 
 			dr.SetResult(tc.authz)
 			testutil.RunStep(t, "does not exist", func(t *testing.T) {
@@ -410,7 +343,7 @@ type dummyACLResolver struct {
 	result resolver.Result
 }
 
-var _ ACLResolver = (*dummyACLResolver)(nil)
+var _ svc.ACLResolver = (*dummyACLResolver)(nil)
 
 func (r *dummyACLResolver) SetResult(result resolver.Result) {
 	r.lock.Lock()

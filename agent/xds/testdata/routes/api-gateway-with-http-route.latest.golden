@@ -4,7 +4,6 @@
     {
       "@type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
       "name": "8080",
-      "validateClusters": true,
       "virtualHosts": [
         {
           "domains": [
@@ -19,14 +18,13 @@
               },
               "requestHeadersToAdd": [
                 {
-                  "append": true,
                   "header": {
                     "key": "X-Header-Add",
                     "value": "added"
                   }
                 },
                 {
-                  "append": false,
+                  "appendAction": "OVERWRITE_IF_EXISTS_OR_ADD",
                   "header": {
                     "key": "X-Header-Set",
                     "value": "set"

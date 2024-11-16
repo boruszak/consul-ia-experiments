@@ -24,6 +24,12 @@ import (
 
 	"github.com/armon/go-metrics"
 	"github.com/armon/go-metrics/prometheus"
+	"github.com/rboyer/safeio"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
+
 	"github.com/hashicorp/go-connlimit"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
@@ -31,10 +37,6 @@ import (
 	"github.com/hashicorp/hcp-scada-provider/capability"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/keepalive"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/acl/resolver"
@@ -46,7 +48,6 @@ import (
 	"github.com/hashicorp/consul/agent/consul"
 	rpcRate "github.com/hashicorp/consul/agent/consul/rate"
 	"github.com/hashicorp/consul/agent/consul/servercert"
-	"github.com/hashicorp/consul/agent/dns"
 	external "github.com/hashicorp/consul/agent/grpc-external"
 	grpcDNS "github.com/hashicorp/consul/agent/grpc-external/services/dns"
 	middleware "github.com/hashicorp/consul/agent/grpc-middleware"
@@ -66,7 +67,8 @@ import (
 	"github.com/hashicorp/consul/agent/xds"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/api/watch"
-	proxytracker "github.com/hashicorp/consul/internal/mesh/proxy-tracker"
+	libdns "github.com/hashicorp/consul/internal/dnsutil"
+	"github.com/hashicorp/consul/internal/gossip/librtt"
 	"github.com/hashicorp/consul/ipaddr"
 	"github.com/hashicorp/consul/lib"
 	"github.com/hashicorp/consul/lib/file"
@@ -74,6 +76,7 @@ import (
 	"github.com/hashicorp/consul/lib/routine"
 	"github.com/hashicorp/consul/logging"
 	"github.com/hashicorp/consul/proto-public/pbresource"
+	"github.com/hashicorp/consul/proto/private/pbconfigentry"
 	"github.com/hashicorp/consul/proto/private/pboperator"
 	"github.com/hashicorp/consul/proto/private/pbpeering"
 	"github.com/hashicorp/consul/tlsutil"
@@ -184,7 +187,7 @@ type delegate interface {
 	// are ancillary members of.
 	//
 	// NOTE: This assumes coordinates are enabled, so check that before calling.
-	GetLANCoordinate() (lib.CoordinateSet, error)
+	GetLANCoordinate() (librtt.CoordinateSet, error)
 
 	// JoinLAN is used to have Consul join the inner-DC pool The target address
 	// should be another node inside the DC listening on the Serf LAN address
@@ -216,6 +219,14 @@ type notifier interface {
 	Notify(string) error
 }
 
+// dnsServer abstracts the implementations of the DNS server.
+type dnsServer interface {
+	GetAddr() string
+	ListenAndServe(string, string, func()) error
+	ReloadConfig(*config.RuntimeConfig) error
+	Shutdown()
+}
+
 // Agent is the long running process that is run on every machine.
 // It exposes an RPC interface that is used by the CLI to control the
 // agent. The agent runs the query interfaces like HTTP, DNS, and RPC.
@@ -228,6 +239,9 @@ type Agent struct {
 
 	// config is the agent configuration.
 	config *config.RuntimeConfig
+
+	displayOnlyConfigCopy     *config.RuntimeConfig
+	displayOnlyConfigCopyLock sync.Mutex
 
 	// Used for writing our logs
 	logger hclog.InterceptLogger
@@ -335,7 +349,7 @@ type Agent struct {
 	endpointsLock sync.RWMutex
 
 	// dnsServer provides the DNS API
-	dnsServers []*DNSServer
+	dnsServers []dnsServer
 
 	// apiServers listening for connections. If any of these server goroutines
 	// fail, the agent will be shutdown.
@@ -396,10 +410,11 @@ type Agent struct {
 	// they can update their internal state.
 	configReloaders []ConfigReloader
 
-	// TODO: pass directly to HTTPHandlers and DNSServer once those are passed
+	// TODO: pass directly to HTTPHandlers and dnsServer once those are passed
 	// into Agent, which will allow us to remove this field.
-	rpcClientHealth      *health.Client
-	rpcClientConfigEntry *configentry.Client
+	rpcClientHealth       *health.Client
+	rpcClientConfigEntry  *configentry.Client
+	grpcClientConfigEntry pbconfigentry.ConfigEntryServiceClient
 
 	rpcClientPeering pbpeering.PeeringServiceClient
 
@@ -502,6 +517,7 @@ func New(bd BaseDeps) (*Agent, error) {
 
 	a.rpcClientPeering = pbpeering.NewPeeringServiceClient(conn)
 	a.rpcClientOperator = pboperator.NewOperatorServiceClient(conn)
+	a.grpcClientConfigEntry = pbconfigentry.NewConfigEntryServiceClient(conn)
 
 	a.serviceManager = NewServiceManager(&a)
 	a.rpcClientConfigEntry = &configentry.Client{
@@ -622,9 +638,6 @@ func (a *Agent) Start(ctx context.Context) error {
 	// create the state synchronization manager which performs
 	// regular and on-demand state synchronizations (anti-entropy).
 	a.sync = ae.NewStateSyncer(a.State, c.AEInterval, a.shutdownCh, a.logger)
-	if a.baseDeps.UseV2Resources() {
-		a.sync.HardDisableSync()
-	}
 
 	err = validateFIPSConfig(a.config)
 	if err != nil {
@@ -655,10 +668,6 @@ func (a *Agent) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to start Consul enterprise component: %v", err)
 	}
-
-	// proxyTracker will be used in the creation of the XDS server and also
-	// in the registration of the v2 xds controller
-	var proxyTracker *proxytracker.ProxyTracker
 
 	// Setup either the client or the server.
 	var consulServer *consul.Server
@@ -696,15 +705,10 @@ func (a *Agent) Start(ctx context.Context) error {
 				Time:    a.config.GRPCKeepaliveInterval,
 				Timeout: a.config.GRPCKeepaliveTimeout,
 			},
+			nil,
 		)
 
-		if a.baseDeps.UseV2Resources() {
-			proxyTracker = proxytracker.NewProxyTracker(proxytracker.ProxyTrackerConfig{
-				Logger:         a.logger.Named("proxy-tracker"),
-				SessionLimiter: a.baseDeps.XDSStreamLimiter,
-			})
-		}
-		consulServer, err = consul.NewServer(consulCfg, a.baseDeps.Deps, a.externalGRPCServer, incomingRPCLimiter, serverLogger, proxyTracker)
+		consulServer, err = consul.NewServer(consulCfg, a.baseDeps.Deps, a.externalGRPCServer, incomingRPCLimiter, serverLogger)
 		if err != nil {
 			return fmt.Errorf("Failed to start Consul server: %v", err)
 		}
@@ -728,6 +732,11 @@ func (a *Agent) Start(ctx context.Context) error {
 			}
 		}
 	} else {
+		// the conn is used to connect to the consul server agent
+		conn, err := a.baseDeps.GRPCConnPool.ClientConn(a.baseDeps.RuntimeConfig.Datacenter)
+		if err != nil {
+			return err
+		}
 		a.externalGRPCServer = external.NewServer(
 			a.logger.Named("grpc.external"),
 			metrics.Default(),
@@ -737,6 +746,7 @@ func (a *Agent) Start(ctx context.Context) error {
 				Time:    a.config.GRPCKeepaliveInterval,
 				Timeout: a.config.GRPCKeepaliveTimeout,
 			},
+			conn,
 		)
 
 		client, err := consul.NewClient(consulCfg, a.baseDeps.Deps)
@@ -780,6 +790,15 @@ func (a *Agent) Start(ctx context.Context) error {
 		return fmt.Errorf("unexpected ACL default policy value of %q", a.config.ACLResolverSettings.ACLDefaultPolicy)
 	}
 
+	// If DefaultIntentionPolicy is defined, it should override
+	// the values inherited from ACLDefaultPolicy.
+	switch a.config.DefaultIntentionPolicy {
+	case "allow":
+		intentionDefaultAllow = true
+	case "deny":
+		intentionDefaultAllow = false
+	}
+
 	go a.baseDeps.ViewStore.Run(&lib.StopChannelContext{StopCh: a.shutdownCh})
 
 	// Start the proxy config manager.
@@ -791,6 +810,7 @@ func (a *Agent) Start(ctx context.Context) error {
 			Segment:       a.config.SegmentName,
 			Node:          a.config.NodeName,
 			NodePartition: a.config.PartitionOrEmpty(),
+			DisableNode:   true, // Disable for agentless so that streaming RPCs can be used.
 		},
 		DNSConfig: proxycfg.DNSConfig{
 			Domain:    a.config.DNSDomain,
@@ -857,7 +877,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	// Start grpc and grpc_tls servers.
-	if err := a.listenAndServeGRPC(proxyTracker, consulServer); err != nil {
+	if err := a.listenAndServeGRPC(consulServer); err != nil {
 		return err
 	}
 
@@ -895,17 +915,6 @@ func (a *Agent) Start(ctx context.Context) error {
 		}()
 	}
 
-	if a.scadaProvider != nil {
-		a.scadaProvider.UpdateMeta(map[string]string{
-			"consul_server_id": string(a.config.NodeID),
-		})
-
-		if err = a.scadaProvider.Start(); err != nil {
-			a.baseDeps.Logger.Error("scada provider failed to start, some HashiCorp Cloud Platform functionality has been disabled",
-				"error", err, "resource_id", a.config.Cloud.ResourceID)
-		}
-	}
-
 	return nil
 }
 
@@ -929,28 +938,20 @@ func (a *Agent) configureXDSServer(proxyWatcher xds.ProxyWatcher, server *consul
 	// TODO(agentless): rather than asserting the concrete type of delegate, we
 	// should add a method to the Delegate interface to build a ConfigSource.
 	if server != nil {
-		switch proxyWatcher.(type) {
-		case *proxytracker.ProxyTracker:
-			go func() {
-				<-a.shutdownCh
-				proxyWatcher.(*proxytracker.ProxyTracker).Shutdown()
-			}()
-		default:
-			catalogCfg := catalogproxycfg.NewConfigSource(catalogproxycfg.Config{
-				NodeName:          a.config.NodeName,
-				LocalState:        a.State,
-				LocalConfigSource: proxyWatcher,
-				Manager:           a.proxyConfig,
-				GetStore:          func() catalogproxycfg.Store { return server.FSM().State() },
-				Logger:            a.proxyConfig.Logger.Named("server-catalog"),
-				SessionLimiter:    a.baseDeps.XDSStreamLimiter,
-			})
-			go func() {
-				<-a.shutdownCh
-				catalogCfg.Shutdown()
-			}()
-			proxyWatcher = catalogCfg
-		}
+		catalogCfg := catalogproxycfg.NewConfigSource(catalogproxycfg.Config{
+			NodeName:          a.config.NodeName,
+			LocalState:        a.State,
+			LocalConfigSource: proxyWatcher,
+			Manager:           a.proxyConfig,
+			GetStore:          func() catalogproxycfg.Store { return server.FSM().State() },
+			Logger:            a.proxyConfig.Logger.Named("server-catalog"),
+			SessionLimiter:    a.baseDeps.XDSStreamLimiter,
+		})
+		go func() {
+			<-a.shutdownCh
+			catalogCfg.Shutdown()
+		}()
+		proxyWatcher = catalogCfg
 	}
 	a.xdsServer = xds.NewServer(
 		a.config.NodeName,
@@ -964,16 +965,11 @@ func (a *Agent) configureXDSServer(proxyWatcher xds.ProxyWatcher, server *consul
 	a.xdsServer.Register(a.externalGRPCServer)
 }
 
-func (a *Agent) listenAndServeGRPC(proxyTracker *proxytracker.ProxyTracker, server *consul.Server) error {
+func (a *Agent) listenAndServeGRPC(server *consul.Server) error {
 	if len(a.config.GRPCAddrs) < 1 && len(a.config.GRPCTLSAddrs) < 1 {
 		return nil
 	}
-	var proxyWatcher xds.ProxyWatcher
-	if a.baseDeps.UseV2Resources() {
-		proxyWatcher = proxyTracker
-	} else {
-		proxyWatcher = localproxycfg.NewConfigSource(a.proxyConfig)
-	}
+	var proxyWatcher xds.ProxyWatcher = localproxycfg.NewConfigSource(a.proxyConfig)
 
 	a.configureXDSServer(proxyWatcher, server)
 
@@ -1196,7 +1192,7 @@ func (a *Agent) listenHTTP() ([]apiServer, error) {
 	}
 
 	httpAddrs := a.config.HTTPAddrs
-	if a.config.IsCloudEnabled() {
+	if a.config.IsCloudEnabled() && a.scadaProvider != nil {
 		httpAddrs = append(httpAddrs, scada.CAPCoreAPI)
 	}
 
@@ -1438,6 +1434,9 @@ func newConsulConfig(runtimeCfg *config.RuntimeConfig, logger hclog.Logger) (*co
 	cfg.GRPCTLSPort = runtimeCfg.GRPCTLSPort
 
 	cfg.Segment = runtimeCfg.SegmentName
+
+	cfg.RaftConfig.PreVoteDisabled = runtimeCfg.RaftPreVoteDisabled
+
 	if len(runtimeCfg.Segments) > 0 {
 		segments, err := segmentConfig(runtimeCfg)
 		if err != nil {
@@ -1597,7 +1596,7 @@ func newConsulConfig(runtimeCfg *config.RuntimeConfig, logger hclog.Logger) (*co
 	cfg.RequestLimitsWriteRate = runtimeCfg.RequestLimitsWriteRate
 	cfg.Locality = runtimeCfg.StructLocality()
 
-	cfg.Cloud.ManagementToken = runtimeCfg.Cloud.ManagementToken
+	cfg.Cloud = runtimeCfg.Cloud
 
 	cfg.Reporting.License.Enabled = runtimeCfg.Reporting.License.Enabled
 
@@ -1813,14 +1812,7 @@ func (a *Agent) ShutdownEndpoints() {
 	ctx := context.TODO()
 
 	for _, srv := range a.dnsServers {
-		if srv.Server != nil {
-			a.logger.Info("Stopping server",
-				"protocol", "DNS",
-				"address", srv.Server.Addr,
-				"network", srv.Server.Net,
-			)
-			srv.Shutdown()
-		}
+		srv.Shutdown()
 	}
 	a.dnsServers = nil
 
@@ -2032,7 +2024,7 @@ func (a *Agent) SyncPausedCh() <-chan struct{} {
 
 // GetLANCoordinate returns the coordinates of this node in the local pools
 // (assumes coordinates are enabled, so check that before calling).
-func (a *Agent) GetLANCoordinate() (lib.CoordinateSet, error) {
+func (a *Agent) GetLANCoordinate() (librtt.CoordinateSet, error) {
 	return a.delegate.GetLANCoordinate()
 }
 
@@ -2655,13 +2647,13 @@ func (a *Agent) validateService(service *structs.NodeService, chkTypes []*struct
 	}
 
 	// Warn if the service name is incompatible with DNS
-	if dns.InvalidNameRe.MatchString(service.Service) {
+	if libdns.InvalidNameRe.MatchString(service.Service) {
 		a.logger.Warn("Service name will not be discoverable "+
 			"via DNS due to invalid characters. Valid characters include "+
 			"all alpha-numerics and dashes.",
 			"service", service.Service,
 		)
-	} else if len(service.Service) > dns.MaxLabelLength {
+	} else if len(service.Service) > libdns.MaxLabelLength {
 		a.logger.Warn("Service name will not be discoverable "+
 			"via DNS due to it being too long. Valid lengths are between "+
 			"1 and 63 bytes.",
@@ -2671,13 +2663,13 @@ func (a *Agent) validateService(service *structs.NodeService, chkTypes []*struct
 
 	// Warn if any tags are incompatible with DNS
 	for _, tag := range service.Tags {
-		if dns.InvalidNameRe.MatchString(tag) {
+		if libdns.InvalidNameRe.MatchString(tag) {
 			a.logger.Debug("Service tag will not be discoverable "+
 				"via DNS due to invalid characters. Valid characters include "+
 				"all alpha-numerics and dashes.",
 				"tag", tag,
 			)
-		} else if len(tag) > dns.MaxLabelLength {
+		} else if len(tag) > libdns.MaxLabelLength {
 			a.logger.Debug("Service tag will not be discoverable "+
 				"via DNS due to it being too long. Valid lengths are between "+
 				"1 and 63 bytes.",
@@ -4352,9 +4344,20 @@ func (a *Agent) reloadConfigInternal(newCfg *config.RuntimeConfig) error {
 	a.config.EnableDebug = newCfg.EnableDebug
 
 	// update Agent config with new config
-	a.config = newCfg.DeepCopy()
+	a.displayOnlyConfigCopyLock.Lock()
+	a.displayOnlyConfigCopy = newCfg.DeepCopy()
+	a.displayOnlyConfigCopyLock.Unlock()
 
 	return nil
+}
+
+func (a *Agent) getRuntimeConfigForDisplay() *config.RuntimeConfig {
+	a.displayOnlyConfigCopyLock.Lock()
+	defer a.displayOnlyConfigCopyLock.Unlock()
+	if a.displayOnlyConfigCopy != nil {
+		return a.displayOnlyConfigCopy.DeepCopy()
+	}
+	return a.config
 }
 
 // LocalBlockingQuery performs a blocking query in a generic way against
@@ -4626,8 +4629,8 @@ func (a *Agent) proxyDataSources(server *consul.Server) proxycfg.DataSources {
 		sources.Health = proxycfgglue.ServerHealthBlocking(deps, proxycfgglue.ClientHealth(a.rpcClientHealth))
 		sources.HTTPChecks = proxycfgglue.ServerHTTPChecks(deps, a.config.NodeName, proxycfgglue.CacheHTTPChecks(a.cache), a.State)
 		sources.Intentions = proxycfgglue.ServerIntentions(deps)
-		sources.IntentionUpstreams = proxycfgglue.ServerIntentionUpstreams(deps)
-		sources.IntentionUpstreamsDestination = proxycfgglue.ServerIntentionUpstreamsDestination(deps)
+		sources.IntentionUpstreams = proxycfgglue.ServerIntentionUpstreams(deps, a.config.DefaultIntentionPolicy)
+		sources.IntentionUpstreamsDestination = proxycfgglue.ServerIntentionUpstreamsDestination(deps, a.config.DefaultIntentionPolicy)
 		sources.InternalServiceDump = proxycfgglue.ServerInternalServiceDump(deps, proxycfgglue.CacheInternalServiceDump(a.cache))
 		sources.PeeringList = proxycfgglue.ServerPeeringList(deps)
 		sources.PeeredUpstreams = proxycfgglue.ServerPeeredUpstreams(deps)
@@ -4668,6 +4671,14 @@ func (a *Agent) persistServerMetadata() {
 				continue
 			}
 
+			// Use safeio.File to ensure the file is written to disk atomically
+			if sf, ok := f.(*safeio.File); ok {
+				if err := sf.Commit(); err != nil {
+					sf.Close()
+					a.logger.Error("failed to commit server metadata", "error", err)
+					continue
+				}
+			}
 			f.Close()
 		case <-a.shutdownCh:
 			return
@@ -4752,4 +4763,14 @@ func defaultIfEmpty(val, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+func (a *Agent) getTokenFunc() func() string {
+	return func() string {
+		if a.tokens.DNSToken() != "" {
+			return a.tokens.DNSToken()
+		} else {
+			return a.tokens.UserToken()
+		}
+	}
 }

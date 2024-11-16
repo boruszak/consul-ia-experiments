@@ -83,17 +83,24 @@ query_prefix "" {
 }`,
 			},
 		},
-		"workload-identity-template": {
+		"api-gateway-template": {
 			templatedPolicy: &ACLTemplatedPolicy{
-				TemplateID:   ACLTemplatedPolicyWorkloadIdentityID,
-				TemplateName: api.ACLTemplatedPolicyWorkloadIdentityName,
+				TemplateID:   ACLTemplatedPolicyAPIGatewayID,
+				TemplateName: api.ACLTemplatedPolicyAPIGatewayName,
 				TemplateVariables: &ACLTemplatedPolicyVariables{
-					Name: "api",
+					Name: "api-gateway",
 				},
 			},
 			expectedPolicy: &ACLPolicy{
-				Description: "synthetic policy generated from templated policy: builtin/workload-identity",
-				Rules: `identity "api" {
+				Description: "synthetic policy generated from templated policy: builtin/api-gateway",
+				Rules: `mesh = "read"
+node_prefix "" {
+	policy = "read"
+}
+service_prefix "" {
+	policy = "read"
+}
+service "api-gateway" {
 	policy = "write"
 }`,
 			},

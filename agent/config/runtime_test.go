@@ -69,6 +69,9 @@ var defaultGrpcTlsAddr = net.TCPAddrFromAddrPort(netip.MustParseAddrPort("127.0.
 // checks for warnings on deprecated fields and flags.  These tests
 // should check one option at a time if possible
 func TestLoad_IntegrationWithFlags(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
 	dataDir := testutil.TempDir(t, "config")
 
 	run := func(t *testing.T, tc testCase) {
@@ -2326,7 +2329,6 @@ func TestLoad_IntegrationWithFlags(t *testing.T) {
 		expected: func(rt *RuntimeConfig) {
 			rt.DataDir = dataDir
 			rt.Cloud = hcpconfig.CloudConfig{
-				// ID is only populated from env if not populated from other sources.
 				ResourceID: "env-id",
 				NodeName:   "thehostname",
 				NodeID:     "",
@@ -2368,8 +2370,7 @@ func TestLoad_IntegrationWithFlags(t *testing.T) {
 		expected: func(rt *RuntimeConfig) {
 			rt.DataDir = dataDir
 			rt.Cloud = hcpconfig.CloudConfig{
-				// ID is only populated from env if not populated from other sources.
-				ResourceID: "file-id",
+				ResourceID: "env-id",
 				NodeName:   "thehostname",
 			}
 
@@ -6015,24 +6016,6 @@ func TestLoad_IntegrationWithFlags(t *testing.T) {
 		},
 	})
 	run(t, testCase{
-		desc: "logstore defaults",
-		args: []string{
-			`-data-dir=` + dataDir,
-		},
-		json: []string{`
-			{
-				"experiments": ["resource-apis"]
-			}	
-		`},
-		hcl: []string{`experiments=["resource-apis"]`},
-		expected: func(rt *RuntimeConfig) {
-			rt.DataDir = dataDir
-			rt.RaftLogStoreConfig.Backend = consul.LogStoreBackendDefault
-			rt.RaftLogStoreConfig.WAL.SegmentSize = 64 * 1024 * 1024
-			rt.Experiments = []string{"resource-apis"}
-		},
-	})
-	run(t, testCase{
 		// this was a bug in the initial config commit. Specifying part of this
 		// stanza should still result in sensible defaults for the other parts.
 		desc: "wal defaults",
@@ -6224,6 +6207,9 @@ func (tc testCase) run(format string, dataDir string) func(t *testing.T) {
 		expected.ACLResolverSettings.NodeName = expected.NodeName
 		expected.ACLResolverSettings.EnterpriseMeta = *structs.NodeEnterpriseMetaInPartition(expected.PartitionOrDefault())
 
+		for i, e := range expected.ConfigEntryBootstrap {
+			e.SetHash(actual.ConfigEntryBootstrap[i].GetHash())
+		}
 		prototest.AssertDeepEqual(t, expected, actual, cmpopts.EquateEmpty())
 		if tc.cleanup != nil {
 			tc.cleanup()
@@ -6608,6 +6594,7 @@ func TestLoad_FullConfig(t *testing.T) {
 		RaftSnapshotThreshold:   16384,
 		RaftSnapshotInterval:    30 * time.Second,
 		RaftTrailingLogs:        83749,
+		RaftPreVoteDisabled:     false,
 		ReconnectTimeoutLAN:     23739 * time.Second,
 		ReconnectTimeoutWAN:     26694 * time.Second,
 		RequestLimitsMode:       consulrate.ModePermissive,
@@ -6970,7 +6957,8 @@ func TestLoad_FullConfig(t *testing.T) {
 				Expiration: 15 * time.Second,
 				Name:       "ftO6DySn", // notice this is the same as the metrics prefix
 			},
-			EnableHostMetrics: true,
+			EnableHostMetrics:             true,
+			DisablePerTenancyUsageMetrics: true,
 		},
 		TLS: tlsutil.Config{
 			InternalRPC: tlsutil.ProtocolConfig{
@@ -7119,6 +7107,9 @@ func TestLoad_FullConfig(t *testing.T) {
 				time.Date(2019, 11, 20, 5, 0, 0, 0, time.UTC)))
 			r, err := Load(opts)
 			require.NoError(t, err)
+			for i, e := range expected.ConfigEntryBootstrap {
+				e.SetHash(r.RuntimeConfig.ConfigEntryBootstrap[i].GetHash())
+			}
 			prototest.AssertDeepEqual(t, expected, r.RuntimeConfig)
 			require.ElementsMatch(t, expectedWarns, r.Warnings, "Warnings: %#v", r.Warnings)
 		})

@@ -141,7 +141,7 @@ func NewBaseDeps(configLoader ConfigLoader, logOut io.Writer, providedLogger hcl
 		// This values is set late within newNodeIDFromConfig above
 		cfg.Cloud.NodeID = cfg.NodeID
 
-		d.HCP, err = hcp.NewDeps(cfg.Cloud, d.Logger.Named("hcp"))
+		d.HCP, err = hcp.NewDeps(cfg.Cloud, d.Logger.Named("hcp"), cfg.DataDir)
 		if err != nil {
 			return d, err
 		}
@@ -273,6 +273,9 @@ func (bd BaseDeps) Close() {
 	bd.AutoConfig.Stop()
 	bd.LeafCertManager.Stop()
 	bd.MetricsConfig.Cancel()
+	if bd.HCP.Sink != nil {
+		bd.HCP.Sink.Shutdown()
+	}
 
 	for _, fn := range []func(){bd.deregisterBalancer, bd.deregisterResolver, bd.stopHostCollector} {
 		if fn != nil {

@@ -24,16 +24,27 @@ import (
 func TestStore_ConfigEntry(t *testing.T) {
 	s := testConfigStateStore(t)
 
+	cfg := &structs.ProxyConfigEntry{
+		Kind: structs.ProxyDefaults,
+		Name: "global",
+		Config: map[string]interface{}{
+			"DestinationServiceName": "foo",
+			"protocol":               "udp",
+		},
+	}
+
 	expected := &structs.ProxyConfigEntry{
 		Kind: structs.ProxyDefaults,
 		Name: "global",
 		Config: map[string]interface{}{
 			"DestinationServiceName": "foo",
+			"protocol":               "udp",
 		},
+		Protocol: "udp",
 	}
 
 	// Create
-	require.NoError(t, s.EnsureConfigEntry(0, expected))
+	require.NoError(t, s.EnsureConfigEntry(0, cfg))
 
 	idx, config, err := s.ConfigEntry(nil, structs.ProxyDefaults, "global", nil)
 	require.NoError(t, err)
@@ -761,6 +772,7 @@ func TestStore_ServiceDefaults_Kind_Destination_Wildcard(t *testing.T) {
 					CreateIndex: 8,
 					ModifyIndex: 8,
 				},
+				AutoHostRewrite: true,
 			},
 		}
 		require.Equal(t, expected, gatewayServices)
@@ -808,6 +820,7 @@ func TestStore_ServiceDefaults_Kind_Destination_Wildcard(t *testing.T) {
 					CreateIndex: 7,
 					ModifyIndex: 7,
 				},
+				AutoHostRewrite: true,
 			},
 		}
 		require.Equal(t, expected, gatewayServices)
@@ -832,6 +845,7 @@ func TestStore_ServiceDefaults_Kind_Destination_Wildcard(t *testing.T) {
 					CreateIndex: 7,
 					ModifyIndex: 9,
 				},
+				AutoHostRewrite: true,
 			},
 		}
 		require.Equal(t, expected, gatewayServices)

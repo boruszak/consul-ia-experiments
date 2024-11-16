@@ -25,7 +25,7 @@ be found in the public [user documentation].
 1. [Agent Configuration](./config)
 1. [RPC](./rpc)
 1. [Cluster Persistence](./persistence)
-1. [Resources and Controllers](./resources)
+1. [V2 Architecture](v2-architecture)
 1. [Client Agent](./client-agent)
 1. [Service Discovery](./service-discovery)
 1. [Service Mesh (Connect)](./service-mesh)
@@ -86,3 +86,4 @@ in the editor) to maintain a consistent Consul style for the diagrams.
 [mermaid-js live editor]: https://mermaid-js.github.io/mermaid-live-editor/edit/
 [mermaid-js docs]: https://mermaid-js.github.io/mermaid/
 [consul-mermaid-theme.json]: ./consul-mermaid-theme.json
+

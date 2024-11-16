@@ -1,7 +1,7 @@
 // Copyright (c) HashiCorp, Inc.
 // SPDX-License-Identifier: BUSL-1.1
 
-package resource
+package resource_test
 
 import (
 	"fmt"
@@ -16,6 +16,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/hashicorp/consul/acl/resolver"
+	svc "github.com/hashicorp/consul/agent/grpc-external/services/resource"
+	svctest "github.com/hashicorp/consul/agent/grpc-external/services/resource/testing"
 	"github.com/hashicorp/consul/internal/resource"
 	"github.com/hashicorp/consul/internal/resource/demo"
 	"github.com/hashicorp/consul/proto-public/pbresource"
@@ -44,9 +46,8 @@ func TestWriteStatus_ACL(t *testing.T) {
 
 	for desc, tc := range testcases {
 		t.Run(desc, func(t *testing.T) {
-			server := testServer(t)
-			client := testClient(t, server)
-			demo.RegisterTypes(server.Registry)
+			builder := svctest.NewResourceServiceBuilder().WithRegisterFns(demo.RegisterTypes)
+			client := builder.Run(t)
 
 			artist, err := demo.GenerateV2Artist()
 			require.NoError(t, err)
@@ -56,10 +57,10 @@ func TestWriteStatus_ACL(t *testing.T) {
 			artist = rsp.Resource
 
 			// Defer mocking out authz since above write is necessary to set up the test resource.
-			mockACLResolver := &MockACLResolver{}
+			mockACLResolver := &svc.MockACLResolver{}
 			mockACLResolver.On("ResolveTokenAndDefaultMeta", mock.Anything, mock.Anything, mock.Anything).
 				Return(tc.authz, nil)
-			server.ACLResolver = mockACLResolver
+			builder.ServiceImpl().Config.ACLResolver = mockACLResolver
 
 			// exercise ACL
 			_, err = client.WriteStatus(testContext(t), validWriteStatusRequest(t, artist))
@@ -69,9 +70,9 @@ func TestWriteStatus_ACL(t *testing.T) {
 }
 
 func TestWriteStatus_InputValidation(t *testing.T) {
-	server := testServer(t)
-	client := testClient(t, server)
-	demo.RegisterTypes(server.Registry)
+	client := svctest.NewResourceServiceBuilder().
+		WithRegisterFns(demo.RegisterTypes).
+		Run(t)
 
 	testCases := map[string]struct {
 		typ         *pbresource.Type
@@ -259,9 +260,9 @@ func TestWriteStatus_Success(t *testing.T) {
 		"Non CAS": func(req *pbresource.WriteStatusRequest) { req.Version = "" },
 	} {
 		t.Run(desc, func(t *testing.T) {
-			server := testServer(t)
-			client := testClient(t, server)
-			demo.RegisterTypes(server.Registry)
+			client := svctest.NewResourceServiceBuilder().
+				WithRegisterFns(demo.RegisterTypes).
+				Run(t)
 
 			res, err := demo.GenerateV2Artist()
 			require.NoError(t, err)
@@ -331,9 +332,9 @@ func TestWriteStatus_Tenancy_Defaults(t *testing.T) {
 		},
 	} {
 		t.Run(desc, func(t *testing.T) {
-			server := testServer(t)
-			client := testClient(t, server)
-			demo.RegisterTypes(server.Registry)
+			client := svctest.NewResourceServiceBuilder().
+				WithRegisterFns(demo.RegisterTypes).
+				Run(t)
 
 			// Pick resource based on scope of type in testcase.
 			var res *pbresource.Resource
@@ -368,70 +369,10 @@ func TestWriteStatus_Tenancy_Defaults(t *testing.T) {
 	}
 }
 
-func TestWriteStatus_Tenancy_NotFound(t *testing.T) {
-	for desc, tc := range map[string]struct {
-		scope       resource.Scope
-		modFn       func(req *pbresource.WriteStatusRequest)
-		errCode     codes.Code
-		errContains string
-	}{
-		"namespaced resource provides nonexistant partition": {
-			scope:       resource.ScopeNamespace,
-			modFn:       func(req *pbresource.WriteStatusRequest) { req.Id.Tenancy.Partition = "bad" },
-			errCode:     codes.InvalidArgument,
-			errContains: "partition",
-		},
-		"namespaced resource provides nonexistant namespace": {
-			scope:       resource.ScopeNamespace,
-			modFn:       func(req *pbresource.WriteStatusRequest) { req.Id.Tenancy.Namespace = "bad" },
-			errCode:     codes.InvalidArgument,
-			errContains: "namespace",
-		},
-		"partitioned resource provides nonexistant partition": {
-			scope:       resource.ScopePartition,
-			modFn:       func(req *pbresource.WriteStatusRequest) { req.Id.Tenancy.Partition = "bad" },
-			errCode:     codes.InvalidArgument,
-			errContains: "partition",
-		},
-	} {
-		t.Run(desc, func(t *testing.T) {
-			server := testServer(t)
-			client := testClient(t, server)
-			demo.RegisterTypes(server.Registry)
-
-			// Pick resource based on scope of type in testcase.
-			var res *pbresource.Resource
-			var err error
-			switch tc.scope {
-			case resource.ScopeNamespace:
-				res, err = demo.GenerateV2Artist()
-			case resource.ScopePartition:
-				res, err = demo.GenerateV1RecordLabel("looney-tunes")
-			}
-			require.NoError(t, err)
-
-			// Fill in required fields so validation continues until tenancy is checked
-			req := validWriteStatusRequest(t, res)
-			req.Id.Uid = ulid.Make().String()
-			req.Status.ObservedGeneration = ulid.Make().String()
-
-			// Write status with tenancy modded by testcase.
-			tc.modFn(req)
-			_, err = client.WriteStatus(testContext(t), req)
-
-			// Verify non-existant tenancy field is the cause of the error.
-			require.Error(t, err)
-			require.Equal(t, tc.errCode.String(), status.Code(err).String())
-			require.Contains(t, err.Error(), tc.errContains)
-		})
-	}
-}
-
 func TestWriteStatus_CASFailure(t *testing.T) {
-	server := testServer(t)
-	client := testClient(t, server)
-
-	demo.RegisterTypes(server.Registry)
+	client := svctest.NewResourceServiceBuilder().
+		WithRegisterFns(demo.RegisterTypes).
+		Run(t)
 
 	res, err := demo.GenerateV2Artist()
 	require.NoError(t, err)
@@ -449,8 +390,7 @@ func TestWriteStatus_CASFailure(t *testing.T) {
 }
 
 func TestWriteStatus_TypeNotFound(t *testing.T) {
-	server := testServer(t)
-	client := testClient(t, server)
+	client := svctest.NewResourceServiceBuilder().Run(t)
 
 	res, err := demo.GenerateV2Artist()
 	require.NoError(t, err)
@@ -464,9 +404,9 @@ func TestWriteStatus_TypeNotFound(t *testing.T) {
 }
 
 func TestWriteStatus_ResourceNotFound(t *testing.T) {
-	server := testServer(t)
-	client := testClient(t, server)
-	demo.RegisterTypes(server.Registry)
+	client := svctest.NewResourceServiceBuilder().
+		WithRegisterFns(demo.RegisterTypes).
+		Run(t)
 
 	res, err := demo.GenerateV2Artist()
 	require.NoError(t, err)
@@ -479,9 +419,9 @@ func TestWriteStatus_ResourceNotFound(t *testing.T) {
 }
 
 func TestWriteStatus_WrongUid(t *testing.T) {
-	server := testServer(t)
-	client := testClient(t, server)
-	demo.RegisterTypes(server.Registry)
+	client := svctest.NewResourceServiceBuilder().
+		WithRegisterFns(demo.RegisterTypes).
+		Run(t)
 
 	res, err := demo.GenerateV2Artist()
 	require.NoError(t, err)
@@ -516,8 +456,8 @@ func TestWriteStatus_NonCASUpdate_Retry(t *testing.T) {
 	backend := &blockOnceBackend{
 		Backend: server.Backend,
 
-		readCh:  make(chan struct{}),
-		blockCh: make(chan struct{}),
+		readCompletedCh: make(chan struct{}),
+		blockCh:         make(chan struct{}),
 	}
 	server.Backend = backend
 
@@ -532,7 +472,7 @@ func TestWriteStatus_NonCASUpdate_Retry(t *testing.T) {
 
 	// Wait for the read, to ensure the Write in the goroutine above has read the
 	// current version of the resource.
-	<-backend.readCh
+	<-backend.readCompletedCh
 
 	// Update the resource.
 	_, err = client.Write(testContext(t), &pbresource.WriteRequest{Resource: modifyArtist(t, res)})

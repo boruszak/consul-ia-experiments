@@ -4,20 +4,42 @@
 package resourcetest
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/consul/internal/resource"
 	"github.com/hashicorp/consul/proto-public/pbresource"
+	"github.com/hashicorp/consul/version/versiontest"
 )
+
+// TestTenancies returns a list of tenancies which represent
+// the namespace and partition combinations that can be used in unit tests
+func TestTenancies() []*pbresource.Tenancy {
+	isEnterprise := versiontest.IsEnterprise()
+
+	tenancies := []*pbresource.Tenancy{Tenancy("default.default")}
+	if isEnterprise {
+		// TODO(namespaces/v2) move the default partition + non-default namespace test to run even for CE.
+		tenancies = append(tenancies, Tenancy("default.bar"), Tenancy("foo.default"), Tenancy("foo.bar"))
+	}
+
+	return tenancies
+}
+
+func ToPartitionScoped(t *pbresource.Tenancy) *pbresource.Tenancy {
+	return &pbresource.Tenancy{
+		Partition: t.Partition,
+	}
+}
 
 // Tenancy constructs a pbresource.Tenancy from a concise string representation
 // suitable for use in unit tests.
 //
-// - ""        : partition=""    namespace=""    peerName="local"
-// - "foo"     : partition="foo" namespace=""    peerName="local"
-// - "foo.bar" : partition="foo" namespace="bar" peerName="local"
-// - <others>  : partition="BAD" namespace="BAD" peerName="BAD"
+// - ""        : partition=""    namespace=""
+// - "foo"     : partition="foo" namespace=""
+// - "foo.bar" : partition="foo" namespace="bar"
+// - <others>  : partition="BAD" namespace="BAD"
 func Tenancy(s string) *pbresource.Tenancy {
 	parts := strings.Split(s, ".")
 	switch len(parts) {
@@ -33,7 +55,7 @@ func Tenancy(s string) *pbresource.Tenancy {
 		v.Namespace = parts[1]
 		return v
 	default:
-		return &pbresource.Tenancy{Partition: "BAD", Namespace: "BAD", PeerName: "BAD"}
+		return &pbresource.Tenancy{Partition: "BAD", Namespace: "BAD"}
 	}
 }
 
@@ -48,5 +70,21 @@ func DefaultTenancyForType(t *testing.T, reg resource.Registration) *pbresource.
 	default:
 		t.Fatalf("unsupported resource scope: %v", reg.Scope)
 		return nil
+	}
+}
+
+func AppendTenancyInfoSubtest(name string, subtestName string, tenancy *pbresource.Tenancy) string {
+	return fmt.Sprintf("%s_%s_Namespace_%s_Partition/%s", name, tenancy.Namespace, tenancy.Partition, subtestName)
+}
+
+func AppendTenancyInfo(name string, tenancy *pbresource.Tenancy) string {
+	return fmt.Sprintf("%s_%s_Namespace_%s_Partition", name, tenancy.Namespace, tenancy.Partition)
+}
+
+func RunWithTenancies(testFunc func(tenancy *pbresource.Tenancy), t *testing.T) {
+	for _, tenancy := range TestTenancies() {
+		t.Run(AppendTenancyInfo(t.Name(), tenancy), func(t *testing.T) {
+			testFunc(tenancy)
+		})
 	}
 }

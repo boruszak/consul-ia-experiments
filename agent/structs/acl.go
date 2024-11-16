@@ -13,13 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/consul/api"
-	"github.com/hashicorp/consul/lib/stringslice"
-
 	"golang.org/x/crypto/blake2b"
 
 	"github.com/hashicorp/consul/acl"
+	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/lib"
+	"github.com/hashicorp/consul/lib/stringslice"
 )
 
 type ACLMode string
@@ -62,10 +61,6 @@ agent_prefix "" {
 }
 event_prefix "" {
 	policy = "%[1]s"
-}
-identity_prefix "" {
-	policy = "%[1]s"
-	intentions = "%[1]s"
 }
 key_prefix "" {
 	policy = "%[1]s"
@@ -805,6 +800,11 @@ func (policies ACLPolicies) resolveWithCache(cache *ACLCaches, entConf *acl.Conf
 			continue
 		}
 
+		//pulling from the cache, we don't want to break any rules that are already in the cache
+		if entConf == nil {
+			entConf = &acl.Config{}
+		}
+		entConf.WarnOnDuplicateKey = true
 		p, err := acl.NewPolicyFromSource(policy.Rules, entConf, policy.EnterprisePolicyMeta())
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse %q: %v", policy.Name, err)
@@ -1084,6 +1084,21 @@ const (
 	//   },
 	// }
 	BindingRuleBindTypeTemplatedPolicy = "templated-policy"
+
+	// BindingRuleBindTypePolicy is the binding rule bind type that only allows
+	// the binding rule to function if a policy with the given name (BindName)
+	// exists at login-time. If it does the token that is created is directly
+	// linked to that policy like:
+	//
+	// &ACLToken{
+	//   ...other fields...
+	//   Policies: *ACLTokenPolicyLink{
+	//     { Name: "<computed BindName>" },
+	//   }
+	// }
+	//
+	// If it does not exist at login-time the rule is ignored.
+	BindingRuleBindTypePolicy = "policy"
 )
 
 type ACLBindingRule struct {
@@ -1106,6 +1121,7 @@ type ACLBindingRule struct {
 	//  - BindingRuleBindTypeService         = "service"
 	//  - BindingRuleBindTypeNode            = "node"
 	//  - BindingRuleBindTypeRole            = "role"
+	//  - BindingRuleBindTypePolicy          = "policy"
 	//  - BindingRuleBindTypeTemplatedPolicy = "templated-policy"
 	BindType string
 

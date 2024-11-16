@@ -4,7 +4,6 @@
     {
       "@type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
       "name": "8080",
-      "validateClusters": true,
       "virtualHosts": [
         {
           "domains": [
@@ -32,7 +31,6 @@
             {
               "match": {
                 "safeRegex": {
-                  "googleRe2": {},
                   "regex": "/regex"
                 }
               },
@@ -124,7 +122,6 @@
                     "name": "x-debug",
                     "stringMatch": {
                       "safeRegex": {
-                        "googleRe2": {},
                         "regex": "regex"
                       }
                     }
@@ -141,9 +138,10 @@
                 "headers": [
                   {
                     "name": ":method",
-                    "safeRegexMatch": {
-                      "googleRe2": {},
-                      "regex": "GET|PUT"
+                    "stringMatch": {
+                      "safeRegex": {
+                        "regex": "GET|PUT"
+                      }
                     }
                   }
                 ],
@@ -164,9 +162,10 @@
                   },
                   {
                     "name": ":method",
-                    "safeRegexMatch": {
-                      "googleRe2": {},
-                      "regex": "GET|PUT"
+                    "stringMatch": {
+                      "safeRegex": {
+                        "regex": "GET|PUT"
+                      }
                     }
                   }
                 ],
@@ -200,7 +199,6 @@
                     "name": "secretparam2",
                     "stringMatch": {
                       "safeRegex": {
-                        "googleRe2": {},
                         "regex": "regex"
                       }
                     }
@@ -361,8 +359,7 @@
                       "name": "lil-bit-side.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul",
                       "weight": 50
                     }
-                  ],
-                  "totalWeight": 10000
+                  ]
                 }
               }
             },
@@ -372,14 +369,13 @@
               },
               "requestHeadersToAdd": [
                 {
-                  "append": true,
                   "header": {
                     "key": "request",
                     "value": "bar"
                   }
                 },
                 {
-                  "append": false,
+                  "appendAction": "OVERWRITE_IF_EXISTS_OR_ADD",
                   "header": {
                     "key": "bar",
                     "value": "baz"
@@ -391,14 +387,13 @@
               ],
               "responseHeadersToAdd": [
                 {
-                  "append": true,
                   "header": {
                     "key": "response",
                     "value": "bar"
                   }
                 },
                 {
-                  "append": false,
+                  "appendAction": "OVERWRITE_IF_EXISTS_OR_ADD",
                   "header": {
                     "key": "bar",
                     "value": "baz"

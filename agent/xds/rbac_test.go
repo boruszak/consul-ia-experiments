@@ -10,17 +10,12 @@ import (
 	"sort"
 	"testing"
 
-	envoy_listener_v3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	envoy_rbac_v3 "github.com/envoyproxy/go-control-plane/envoy/config/rbac/v3"
 	envoy_matcher_v3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/structs"
-	"github.com/hashicorp/consul/agent/xdsv2"
-	"github.com/hashicorp/consul/proto-public/pbmesh/v2beta1/pbproxystate"
 	"github.com/hashicorp/consul/proto/private/pbpeering"
 )
 
@@ -556,25 +551,9 @@ func TestMakeRBACNetworkAndHTTPFilters(t *testing.T) {
 		}
 	)
 
-	makeSpiffe := func(name string, entMeta *acl.EnterpriseMeta) *pbproxystate.Spiffe {
-		em := *acl.DefaultEnterpriseMeta()
-		if entMeta != nil {
-			em = *entMeta
-		}
-		regex := makeSpiffePattern(rbacService{
-			ServiceName: structs.ServiceName{
-				Name:           name,
-				EnterpriseMeta: em,
-			},
-			TrustDomain: testTrustDomain,
-		})
-		return &pbproxystate.Spiffe{Regex: regex}
-	}
-
 	tests := map[string]struct {
-		intentionDefaultAllow  bool
-		v1Intentions           structs.SimplifiedIntentions
-		v2L4TrafficPermissions *pbproxystate.TrafficPermissions
+		intentionDefaultAllow bool
+		v1Intentions          structs.SimplifiedIntentions
 	}{
 		"default-deny-mixed-precedence": {
 			intentionDefaultAllow: false,
@@ -583,34 +562,12 @@ func TestMakeRBACNetworkAndHTTPFilters(t *testing.T) {
 				testIntention(t, "*", "api", structs.IntentionActionDeny),
 				testIntention(t, "web", "*", structs.IntentionActionDeny),
 			),
-			v2L4TrafficPermissions: &pbproxystate.TrafficPermissions{
-				AllowPermissions: []*pbproxystate.Permission{
-					{
-						Principals: []*pbproxystate.Principal{
-							{
-								Spiffe: makeSpiffe("web", nil),
-							},
-						},
-					},
-				},
-			},
 		},
 		"default-deny-service-wildcard-allow": {
 			intentionDefaultAllow: false,
 			v1Intentions: sorted(
 				testSourceIntention("*", structs.IntentionActionAllow),
 			),
-			v2L4TrafficPermissions: &pbproxystate.TrafficPermissions{
-				AllowPermissions: []*pbproxystate.Permission{
-					{
-						Principals: []*pbproxystate.Principal{
-							{
-								Spiffe: makeSpiffe("*", nil),
-							},
-						},
-					},
-				},
-			},
 		},
 		"default-allow-service-wildcard-deny": {
 			intentionDefaultAllow: true,
@@ -623,17 +580,6 @@ func TestMakeRBACNetworkAndHTTPFilters(t *testing.T) {
 			v1Intentions: sorted(
 				testSourceIntention("web", structs.IntentionActionAllow),
 			),
-			v2L4TrafficPermissions: &pbproxystate.TrafficPermissions{
-				AllowPermissions: []*pbproxystate.Permission{
-					{
-						Principals: []*pbproxystate.Principal{
-							{
-								Spiffe: makeSpiffe("web", nil),
-							},
-						},
-					},
-				},
-			},
 		},
 		"default-allow-one-deny": {
 			intentionDefaultAllow: true,
@@ -647,18 +593,6 @@ func TestMakeRBACNetworkAndHTTPFilters(t *testing.T) {
 				testSourceIntention("web", structs.IntentionActionDeny),
 				testSourceIntention("*", structs.IntentionActionAllow),
 			),
-			v2L4TrafficPermissions: &pbproxystate.TrafficPermissions{
-				AllowPermissions: []*pbproxystate.Permission{
-					{
-						Principals: []*pbproxystate.Principal{
-							{
-								Spiffe:         makeSpiffe("*", nil),
-								ExcludeSpiffes: []*pbproxystate.Spiffe{makeSpiffe("web", nil)},
-							},
-						},
-					},
-				},
-			},
 		},
 		"default-deny-kitchen-sink": {
 			intentionDefaultAllow: false,
@@ -669,89 +603,6 @@ func TestMakeRBACNetworkAndHTTPFilters(t *testing.T) {
 				testSourceIntention("cron", structs.IntentionActionAllow),
 				testSourceIntention("*", structs.IntentionActionAllow),
 			),
-			v2L4TrafficPermissions: &pbproxystate.TrafficPermissions{
-				AllowPermissions: []*pbproxystate.Permission{
-					{
-						Principals: []*pbproxystate.Principal{
-							{
-								Spiffe: makeSpiffe("cron", nil),
-							},
-							{
-								Spiffe: makeSpiffe("web", nil),
-							},
-							{
-								Spiffe: makeSpiffe("*", nil),
-								ExcludeSpiffes: []*pbproxystate.Spiffe{
-									makeSpiffe("web", nil),
-									makeSpiffe("unsafe", nil),
-									makeSpiffe("cron", nil),
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		"v2-kitchen-sink": {
-			intentionDefaultAllow: false,
-			v2L4TrafficPermissions: &pbproxystate.TrafficPermissions{
-				AllowPermissions: []*pbproxystate.Permission{
-					{
-						Principals: []*pbproxystate.Principal{
-							{
-								Spiffe: makeSpiffe("api", nil),
-							},
-							{
-								Spiffe: makeSpiffe("*", nil),
-								ExcludeSpiffes: []*pbproxystate.Spiffe{
-									makeSpiffe("unsafe", nil),
-								},
-							},
-						},
-					},
-					{
-						Principals: []*pbproxystate.Principal{
-							{
-								Spiffe: makeSpiffe("web", nil),
-							},
-						},
-					},
-				},
-				DenyPermissions: []*pbproxystate.Permission{
-					{
-						Principals: []*pbproxystate.Principal{
-							{
-								Spiffe: makeSpiffe("db", nil),
-							},
-							{
-								Spiffe: makeSpiffe("cron", nil),
-							},
-						},
-					},
-				},
-			},
-		},
-		"v2-default-deny": {
-			intentionDefaultAllow:  false,
-			v2L4TrafficPermissions: &pbproxystate.TrafficPermissions{},
-		},
-		"v2-default-allow": {
-			intentionDefaultAllow:  true,
-			v2L4TrafficPermissions: &pbproxystate.TrafficPermissions{},
-		},
-		// This validates that we don't send xDS messages to Envoy that will fail validation.
-		// Traffic permissions validations prevent this from being written to the IR, so the thing
-		// that matters is that the snapshot is valid to Envoy.
-		"v2-ignore-empty-permissions": {
-			intentionDefaultAllow: false,
-			v2L4TrafficPermissions: &pbproxystate.TrafficPermissions{
-				DenyPermissions: []*pbproxystate.Permission{
-					{},
-				},
-				AllowPermissions: []*pbproxystate.Permission{
-					{},
-				},
-			},
 		},
 		"default-allow-kitchen-sink": {
 			intentionDefaultAllow: true,
@@ -935,11 +786,19 @@ func TestMakeRBACNetworkAndHTTPFilters(t *testing.T) {
 								{Name: "x-bar", Exact: "xyz"},
 								{Name: "x-dib", Prefix: "gaz"},
 								{Name: "x-gir", Suffix: "zim"},
+								{Name: "x-baz", Contains: "qux"},
 								{Name: "x-zim", Regex: "gi[rR]"},
+								// Present does not support IgnoreCase
+								{Name: "y-bar", Exact: "xyz", IgnoreCase: true},
+								{Name: "y-dib", Prefix: "gaz", IgnoreCase: true},
+								{Name: "y-gir", Suffix: "zim", IgnoreCase: true},
+								{Name: "y-baz", Contains: "qux", IgnoreCase: true},
+								// Regex does not support IgnoreCase
 								{Name: "z-foo", Present: true, Invert: true},
 								{Name: "z-bar", Exact: "xyz", Invert: true},
 								{Name: "z-dib", Prefix: "gaz", Invert: true},
 								{Name: "z-gir", Suffix: "zim", Invert: true},
+								{Name: "z-baz", Contains: "qux", Invert: true},
 								{Name: "z-zim", Regex: "gi[rR]", Invert: true},
 							},
 						},
@@ -974,15 +833,25 @@ func TestMakeRBACNetworkAndHTTPFilters(t *testing.T) {
 						Action: structs.IntentionActionDeny,
 						HTTP: &structs.IntentionHTTPPermission{
 							Header: []structs.IntentionHTTPHeaderPermission{
+								// Valid vanilla match options
 								{Name: "x-foo", Present: true},
 								{Name: "x-bar", Exact: "xyz"},
 								{Name: "x-dib", Prefix: "gaz"},
 								{Name: "x-gir", Suffix: "zim"},
+								{Name: "x-baz", Contains: "qux"},
 								{Name: "x-zim", Regex: "gi[rR]"},
+								// Valid ignore case match options
+								// (Present and Regex do not support IgnoreCase)
+								{Name: "y-bar", Exact: "xyz", IgnoreCase: true},
+								{Name: "y-dib", Prefix: "gaz", IgnoreCase: true},
+								{Name: "y-gir", Suffix: "zim", IgnoreCase: true},
+								{Name: "y-baz", Contains: "qux", IgnoreCase: true},
+								// Valid invert match options
 								{Name: "z-foo", Present: true, Invert: true},
 								{Name: "z-bar", Exact: "xyz", Invert: true},
 								{Name: "z-dib", Prefix: "gaz", Invert: true},
 								{Name: "z-gir", Suffix: "zim", Invert: true},
+								{Name: "z-baz", Contains: "qux", Invert: true},
 								{Name: "z-zim", Regex: "gi[rR]", Invert: true},
 							},
 						},
@@ -1077,40 +946,17 @@ func TestMakeRBACNetworkAndHTTPFilters(t *testing.T) {
 
 					require.JSONEq(t, goldenSimple(t, filepath.Join("rbac", name), gotJSON), gotJSON)
 				})
-
-				t.Run("v1 vs v2", func(t *testing.T) {
-					if tt.v2L4TrafficPermissions == nil {
-						return
-					}
-
-					tt.v2L4TrafficPermissions.DefaultAllow = tt.intentionDefaultAllow
-
-					filters, err := xdsv2.MakeRBACNetworkFilters(tt.v2L4TrafficPermissions)
-					require.NoError(t, err)
-
-					var gotJSON string
-					if len(filters) == 1 {
-						gotJSON = protoToJSON(t, filters[0])
-					} else {
-						// This is wrapped because protoToJSON won't encode an array of protobufs.
-						chain := &envoy_listener_v3.FilterChain{}
-						chain.Filters = filters
-						gotJSON = protoToJSON(t, chain)
-					}
-
-					require.JSONEq(t, goldenSimple(t, filepath.Join("rbac", name), gotJSON), gotJSON)
-				})
 			})
 
 			t.Run("http filter", func(t *testing.T) {
-				if len(tt.v1Intentions) == 0 {
-					return
-				}
-
-				filter, err := makeRBACHTTPFilter(tt.v1Intentions, tt.intentionDefaultAllow, testLocalInfo, testPeerTrustBundle, testJWTProviderConfigEntry)
-				require.NoError(t, err)
 
 				t.Run("current", func(t *testing.T) {
+					if len(tt.v1Intentions) == 0 {
+						return
+					}
+
+					filter, err := makeRBACHTTPFilter(tt.v1Intentions, tt.intentionDefaultAllow, testLocalInfo, testPeerTrustBundle, testJWTProviderConfigEntry)
+					require.NoError(t, err)
 					gotJSON := protoToJSON(t, filter)
 
 					require.JSONEq(t, goldenSimple(t, filepath.Join("rbac", name+"--httpfilter"), gotJSON), gotJSON)

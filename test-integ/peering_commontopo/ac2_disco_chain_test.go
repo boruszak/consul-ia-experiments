@@ -7,17 +7,17 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/hashicorp/consul/testing/deployer/topology"
 	"github.com/stretchr/testify/require"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/hashicorp/consul/testing/deployer/topology"
 )
 
 type ac2DiscoChainSuite struct {
 	DC   string
 	Peer string
 
-	clientSID topology.ServiceID
+	clientSID topology.ID
 }
 
 var ac2DiscoChainSuites []sharedTopoSuite = []sharedTopoSuite{
@@ -42,7 +42,7 @@ func (s *ac2DiscoChainSuite) setup(t *testing.T, ct *commonTopo) {
 	// Make an HTTP server with discovery chain config entries
 	server := NewFortioServiceWithDefaults(
 		clu.Datacenter,
-		topology.ServiceID{
+		topology.ID{
 			Name:      "ac2-disco-chain-svc",
 			Partition: partition,
 		},
@@ -82,11 +82,11 @@ func (s *ac2DiscoChainSuite) setup(t *testing.T, ct *commonTopo) {
 			},
 		},
 	)
-	ct.AddServiceNode(clu, serviceExt{Service: server})
+	ct.AddServiceNode(clu, serviceExt{Workload: server})
 
 	// Define server as upstream for client
 	upstream := &topology.Upstream{
-		ID: topology.ServiceID{
+		ID: topology.ID{
 			Name:      server.ID.Name,
 			Partition: partition, // TODO: iterate over all possible partitions
 		},
@@ -98,14 +98,14 @@ func (s *ac2DiscoChainSuite) setup(t *testing.T, ct *commonTopo) {
 	}
 
 	// Make client which will dial server
-	clientSID := topology.ServiceID{
+	clientSID := topology.ID{
 		Name:      "ac2-client",
 		Partition: partition,
 	}
 	client := NewFortioServiceWithDefaults(
 		clu.Datacenter,
 		clientSID,
-		func(s *topology.Service) {
+		func(s *topology.Workload) {
 			s.Upstreams = []*topology.Upstream{
 				upstream,
 			}
@@ -121,7 +121,7 @@ func (s *ac2DiscoChainSuite) setup(t *testing.T, ct *commonTopo) {
 			},
 		},
 	)
-	ct.AddServiceNode(clu, serviceExt{Service: client})
+	ct.AddServiceNode(clu, serviceExt{Workload: client})
 
 	clu.InitialConfigEntries = append(clu.InitialConfigEntries,
 		&api.ServiceConfigEntry{
@@ -161,7 +161,7 @@ func (s *ac2DiscoChainSuite) setup(t *testing.T, ct *commonTopo) {
 func (s *ac2DiscoChainSuite) test(t *testing.T, ct *commonTopo) {
 	dc := ct.Sprawl.Topology().Clusters[s.DC]
 
-	svcs := dc.ServicesByID(s.clientSID)
+	svcs := dc.WorkloadsByID(s.clientSID)
 	require.Len(t, svcs, 1, "expected exactly one client in datacenter")
 
 	client := svcs[0]

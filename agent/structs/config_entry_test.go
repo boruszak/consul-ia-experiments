@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/hashicorp/hcl"
 	"github.com/mitchellh/copystructure"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/hashicorp/consul-net-rpc/go-msgpack/codec"
+	"github.com/hashicorp/hcl"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/cache"
@@ -23,6 +23,20 @@ import (
 	"github.com/hashicorp/consul/sdk/testutil"
 	"github.com/hashicorp/consul/types"
 )
+
+func TestNormalizeGenerateHash(t *testing.T) {
+	for _, cType := range AllConfigEntryKinds {
+		//this is an enterprise only config entry
+		if cType == RateLimitIPConfig {
+			continue
+		}
+		entry, err := MakeConfigEntry(cType, "global")
+		require.NoError(t, err)
+		require.NoError(t, entry.Normalize())
+		require.NotEmpty(t, entry.GetHash(), entry.GetKind())
+	}
+
+}
 
 func TestConfigEntries_ACLs(t *testing.T) {
 	type testACL = configEntryTestACL
@@ -876,6 +890,310 @@ func TestDecodeConfigEntry(t *testing.T) {
 			},
 		},
 		{
+			name: "service-router: kitchen sink case insensitive",
+			snake: `
+				kind = "service-router"
+				name = "main"
+				meta {
+					"foo" = "bar"
+					"gir" = "zim"
+				}
+				routes = [
+					{
+						match {
+							http {
+								path_exact = "/foo"
+								case_insensitive = true
+								header = [
+									{
+										name = "debug1"
+										present = true
+									},
+									{
+										name = "debug2"
+										present = false
+										invert = true
+									},
+									{
+										name = "debug3"
+										exact = "1"
+									},
+									{
+										name = "debug4"
+										prefix = "aaa"
+									},
+									{
+										name = "debug5"
+										suffix = "bbb"
+									},
+									{
+										name = "debug6"
+										regex = "a.*z"
+									},
+								]
+							}
+						}
+						destination {
+						  service               = "carrot"
+						  service_subset         = "kale"
+						  namespace             = "leek"
+						  prefix_rewrite         = "/alternate"
+						  request_timeout        = "99s"
+						  idle_timeout           = "99s"
+						  num_retries            = 12345
+						  retry_on_connect_failure = true
+						  retry_on_status_codes    = [401, 209]
+							request_headers {
+								add {
+									x-foo = "bar"
+								}
+								set {
+									bar = "baz"
+								}
+								remove = ["qux"]
+							}
+							response_headers {
+								add {
+									x-foo = "bar"
+								}
+								set {
+									bar = "baz"
+								}
+								remove = ["qux"]
+							}
+						}
+					},
+					{
+						match {
+							http {
+								path_prefix = "/foo"
+								methods = [ "GET", "DELETE" ]
+								query_param = [
+									{
+										name = "hack1"
+										present = true
+									},
+									{
+										name = "hack2"
+										exact = "1"
+									},
+									{
+										name = "hack3"
+										regex = "a.*z"
+									},
+								]
+							}
+						}
+					},
+					{
+						match {
+							http {
+								path_regex = "/foo"
+							}
+						}
+					},
+				]
+			`,
+			camel: `
+				Kind = "service-router"
+				Name = "main"
+				Meta {
+					"foo" = "bar"
+					"gir" = "zim"
+				}
+				Routes = [
+					{
+						Match {
+							HTTP {
+								PathExact = "/foo"
+								CaseInsensitive = true
+								Header = [
+									{
+										Name = "debug1"
+										Present = true
+									},
+									{
+										Name = "debug2"
+										Present = false
+										Invert = true
+									},
+									{
+										Name = "debug3"
+										Exact = "1"
+									},
+									{
+										Name = "debug4"
+										Prefix = "aaa"
+									},
+									{
+										Name = "debug5"
+										Suffix = "bbb"
+									},
+									{
+										Name = "debug6"
+										Regex = "a.*z"
+									},
+								]
+							}
+						}
+						Destination {
+						  Service               = "carrot"
+						  ServiceSubset         = "kale"
+						  Namespace             = "leek"
+						  PrefixRewrite         = "/alternate"
+						  RequestTimeout        = "99s"
+						  IdleTimeout           = "99s"
+						  NumRetries            = 12345
+						  RetryOnConnectFailure = true
+						  RetryOnStatusCodes    = [401, 209]
+							RequestHeaders {
+								Add {
+									x-foo = "bar"
+								}
+								Set {
+									bar = "baz"
+								}
+								Remove = ["qux"]
+							}
+							ResponseHeaders {
+								Add {
+									x-foo = "bar"
+								}
+								Set {
+									bar = "baz"
+								}
+								Remove = ["qux"]
+							}
+						}
+					},
+					{
+						Match {
+							HTTP {
+								PathPrefix = "/foo"
+								Methods = [ "GET", "DELETE" ]
+								QueryParam = [
+									{
+										Name = "hack1"
+										Present = true
+									},
+									{
+										Name = "hack2"
+										Exact = "1"
+									},
+									{
+										Name = "hack3"
+										Regex = "a.*z"
+									},
+								]
+							}
+						}
+					},
+					{
+						Match {
+							HTTP {
+								PathRegex = "/foo"
+							}
+						}
+					},
+				]
+			`,
+			expect: &ServiceRouterConfigEntry{
+				Kind: "service-router",
+				Name: "main",
+				Meta: map[string]string{
+					"foo": "bar",
+					"gir": "zim",
+				},
+				Routes: []ServiceRoute{
+					{
+						Match: &ServiceRouteMatch{
+							HTTP: &ServiceRouteHTTPMatch{
+								PathExact:       "/foo",
+								CaseInsensitive: true,
+								Header: []ServiceRouteHTTPMatchHeader{
+									{
+										Name:    "debug1",
+										Present: true,
+									},
+									{
+										Name:    "debug2",
+										Present: false,
+										Invert:  true,
+									},
+									{
+										Name:  "debug3",
+										Exact: "1",
+									},
+									{
+										Name:   "debug4",
+										Prefix: "aaa",
+									},
+									{
+										Name:   "debug5",
+										Suffix: "bbb",
+									},
+									{
+										Name:  "debug6",
+										Regex: "a.*z",
+									},
+								},
+							},
+						},
+						Destination: &ServiceRouteDestination{
+							Service:               "carrot",
+							ServiceSubset:         "kale",
+							Namespace:             "leek",
+							PrefixRewrite:         "/alternate",
+							RequestTimeout:        99 * time.Second,
+							IdleTimeout:           99 * time.Second,
+							NumRetries:            12345,
+							RetryOnConnectFailure: true,
+							RetryOnStatusCodes:    []uint32{401, 209},
+							RequestHeaders: &HTTPHeaderModifiers{
+								Add:    map[string]string{"x-foo": "bar"},
+								Set:    map[string]string{"bar": "baz"},
+								Remove: []string{"qux"},
+							},
+							ResponseHeaders: &HTTPHeaderModifiers{
+								Add:    map[string]string{"x-foo": "bar"},
+								Set:    map[string]string{"bar": "baz"},
+								Remove: []string{"qux"},
+							},
+						},
+					},
+					{
+						Match: &ServiceRouteMatch{
+							HTTP: &ServiceRouteHTTPMatch{
+								PathPrefix: "/foo",
+								Methods:    []string{"GET", "DELETE"},
+								QueryParam: []ServiceRouteHTTPMatchQueryParam{
+									{
+										Name:    "hack1",
+										Present: true,
+									},
+									{
+										Name:  "hack2",
+										Exact: "1",
+									},
+									{
+										Name:  "hack3",
+										Regex: "a.*z",
+									},
+								},
+							},
+						},
+					},
+					{
+						Match: &ServiceRouteMatch{
+							HTTP: &ServiceRouteHTTPMatch{
+								PathRegex: "/foo",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "service-splitter: kitchen sink",
 			snake: `
 				kind = "service-splitter"
@@ -1593,6 +1911,10 @@ func TestDecodeConfigEntry(t *testing.T) {
 							  suffix = "suffix"
 							},
 							{
+							  name   = "hdr-contains"
+							  contains = "contains"
+							},
+							{
 							  name  = "hdr-regex"
 							  regex = "regex"
 							},
@@ -1600,7 +1922,12 @@ func TestDecodeConfigEntry(t *testing.T) {
 							  name    = "hdr-absent"
 							  present = true
 							  invert  = true
-							}
+							},
+							{
+							  name  = "hdr-ignore-case"
+							  exact = "exact"
+							  ignore_case = true
+							},
 						  ]
 						}
 					  },
@@ -1670,6 +1997,10 @@ func TestDecodeConfigEntry(t *testing.T) {
 							  Suffix = "suffix"
 							},
 							{
+							  Name   = "hdr-contains"
+							  Contains = "contains"
+							},
+							{
 							  Name  = "hdr-regex"
 							  Regex = "regex"
 							},
@@ -1677,6 +2008,11 @@ func TestDecodeConfigEntry(t *testing.T) {
 							  Name    = "hdr-absent"
 							  Present = true
 							  Invert  = true
+							},
+							{
+							  Name  = "hdr-ignore-case"
+							  Exact = "exact"
+							  IgnoreCase = true
 							}
 						  ]
 						}
@@ -1747,6 +2083,10 @@ func TestDecodeConfigEntry(t *testing.T) {
 											Suffix: "suffix",
 										},
 										{
+											Name:     "hdr-contains",
+											Contains: "contains",
+										},
+										{
 											Name:  "hdr-regex",
 											Regex: "regex",
 										},
@@ -1754,6 +2094,11 @@ func TestDecodeConfigEntry(t *testing.T) {
 											Name:    "hdr-absent",
 											Present: true,
 											Invert:  true,
+										},
+										{
+											Name:       "hdr-ignore-case",
+											Exact:      "exact",
+											IgnoreCase: true,
 										},
 									},
 								},
@@ -1816,7 +2161,7 @@ func TestDecodeConfigEntry(t *testing.T) {
 			},
 		},
 		{
-			name: "mesh",
+			name: "mesh: kitchen sink",
 			snake: `
 				kind = "mesh"
 				meta {
@@ -1827,6 +2172,7 @@ func TestDecodeConfigEntry(t *testing.T) {
 					mesh_destinations_only = true
 				}
 				allow_enabling_permissive_mutual_tls = true
+                validate_clusters = true
 				tls {
 					incoming {
 						tls_min_version = "TLSv1_1"
@@ -1845,9 +2191,17 @@ func TestDecodeConfigEntry(t *testing.T) {
 						]
 					}
 				}
-				http {
-					sanitize_x_forwarded_client_cert = true
-				}
+                http {
+                    sanitize_x_forwarded_client_cert = true
+                    incoming {
+                        request_normalization {
+                        	insecure_disable_path_normalization = true
+                            merge_slashes = true
+                            path_with_escaped_slashes_action = "UNESCAPE_AND_FORWARD"
+							headers_with_underscores_action = "DROP_HEADER"
+                        }
+                    }
+                }
 				peering {
 					peer_through_mesh_gateways = true
 				}
@@ -1862,6 +2216,7 @@ func TestDecodeConfigEntry(t *testing.T) {
 					MeshDestinationsOnly = true
 				}
 				AllowEnablingPermissiveMutualTLS = true
+                ValidateClusters = true
 				TLS {
 					Incoming {
 						TLSMinVersion = "TLSv1_1"
@@ -1880,9 +2235,17 @@ func TestDecodeConfigEntry(t *testing.T) {
 						]
 					}
 				}
-				HTTP {
-					SanitizeXForwardedClientCert = true
-				}
+                HTTP {
+                    SanitizeXForwardedClientCert = true
+                    Incoming {
+                        RequestNormalization {
+                        	InsecureDisablePathNormalization = true
+                            MergeSlashes = true
+                            PathWithEscapedSlashesAction = "UNESCAPE_AND_FORWARD"
+							HeadersWithUnderscoresAction = "DROP_HEADER"
+                        }
+                    }
+                }
 				Peering {
 					PeerThroughMeshGateways = true
 				}
@@ -1896,6 +2259,7 @@ func TestDecodeConfigEntry(t *testing.T) {
 					MeshDestinationsOnly: true,
 				},
 				AllowEnablingPermissiveMutualTLS: true,
+				ValidateClusters:                 true,
 				TLS: &MeshTLSConfig{
 					Incoming: &MeshDirectionalTLSConfig{
 						TLSMinVersion: types.TLSv1_1,
@@ -1916,6 +2280,14 @@ func TestDecodeConfigEntry(t *testing.T) {
 				},
 				HTTP: &MeshHTTPConfig{
 					SanitizeXForwardedClientCert: true,
+					Incoming: &MeshDirectionalHTTPConfig{
+						RequestNormalization: &RequestNormalizationMeshConfig{
+							InsecureDisablePathNormalization: true, // note: this is the opposite of the recommended default
+							MergeSlashes:                     true,
+							PathWithEscapedSlashesAction:     "UNESCAPE_AND_FORWARD",
+							HeadersWithUnderscoresAction:     "DROP_HEADER",
+						},
+					},
 				},
 				Peering: &PeeringMeshConfig{
 					PeerThroughMeshGateways: true,
@@ -2907,6 +3279,14 @@ func TestServiceConfigEntry(t *testing.T) {
 			},
 			validateErr: `Invalid MutualTLSMode "invalid-mtls-mode". Must be one of "", "strict", or "permissive".`,
 		},
+		"validate: invalid Protocol in service-defaults": {
+			entry: &ServiceConfigEntry{
+				Kind:     ServiceDefaults,
+				Name:     "web",
+				Protocol: "blah",
+			},
+			validateErr: `invalid value for protocol: blah`,
+		},
 	}
 	testConfigEntryNormalizeAndValidate(t, cases)
 }
@@ -3344,6 +3724,47 @@ func TestProxyConfigEntry(t *testing.T) {
 	testConfigEntryNormalizeAndValidate(t, cases)
 }
 
+func TestProxyConfigEntry_ComputeProtocol(t *testing.T) {
+	t.Run("ComputeProtocol sets protocol field correctly", func(t *testing.T) {
+		pd := &ProxyConfigEntry{
+			Kind: ProxyDefaults,
+			Name: "global",
+			Config: map[string]interface{}{
+				"protocol": "http",
+			},
+		}
+		require.NoError(t, pd.ComputeProtocol())
+		require.Equal(t, &ProxyConfigEntry{
+			Kind:     ProxyDefaults,
+			Name:     "global",
+			Protocol: "http",
+			Config: map[string]interface{}{
+				"protocol": "http",
+			},
+		}, pd)
+	})
+	t.Run("Normalize sets protocol field correctly", func(t *testing.T) {
+		pd := &ProxyConfigEntry{
+			Kind: ProxyDefaults,
+			Name: "global",
+			Config: map[string]interface{}{
+				"protocol": "http",
+			},
+		}
+		require.NoError(t, pd.Normalize())
+		pd.Hash = 0
+		require.Equal(t, &ProxyConfigEntry{
+			Kind:     ProxyDefaults,
+			Name:     "global",
+			Protocol: "http",
+			Config: map[string]interface{}{
+				"protocol": "http",
+			},
+			EnterpriseMeta: *acl.DefaultEnterpriseMeta(),
+		}, pd)
+	})
+}
+
 func requireContainsLower(t *testing.T, haystack, needle string) {
 	t.Helper()
 	require.Contains(t, strings.ToLower(haystack), strings.ToLower(needle))
@@ -3407,6 +3828,7 @@ func testConfigEntryNormalizeAndValidate(t *testing.T, cases map[string]configEn
 			}
 
 			if tc.expected != nil {
+				tc.expected.SetHash(tc.entry.GetHash())
 				require.Equal(t, tc.expected, tc.entry)
 			}
 
@@ -3420,6 +3842,7 @@ func testConfigEntryNormalizeAndValidate(t *testing.T, cases map[string]configEn
 						return a.IsSame(&b)
 					}),
 				}
+				beforeNormalize.(ConfigEntry).SetHash(tc.entry.GetHash())
 				if diff := cmp.Diff(beforeNormalize, tc.entry, opts); diff != "" {
 					t.Fatalf("expect unchanged after Normalize, got diff:\n%s", diff)
 				}

@@ -1,26 +1,30 @@
 // Copyright (c) HashiCorp, Inc.
 // SPDX-License-Identifier: BUSL-1.1
 
-package resource
+package resource_test
 
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/hashicorp/go-uuid"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/acl/resolver"
+	svc "github.com/hashicorp/consul/agent/grpc-external/services/resource"
 	"github.com/hashicorp/consul/agent/grpc-external/testutils"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/internal/resource"
 	"github.com/hashicorp/consul/internal/resource/demo"
+	"github.com/hashicorp/consul/internal/storage"
 	"github.com/hashicorp/consul/internal/storage/inmem"
 	"github.com/hashicorp/consul/proto-public/pbresource"
 	pbdemov2 "github.com/hashicorp/consul/proto/private/pbdemo/v2"
@@ -51,7 +55,8 @@ func AuthorizerFrom(t *testing.T, policyStrs ...string) resolver.Result {
 	}
 }
 
-func testServer(t *testing.T) *Server {
+// Deprecated: use NewResourceServiceBuilder instead
+func testServer(t *testing.T) *svc.Server {
 	t.Helper()
 
 	backend, err := inmem.NewBackend()
@@ -59,7 +64,7 @@ func testServer(t *testing.T) *Server {
 	go backend.Run(testContext(t))
 
 	// Mock the ACL Resolver to "allow all" for testing.
-	mockACLResolver := &MockACLResolver{}
+	mockACLResolver := &svc.MockACLResolver{}
 	mockACLResolver.On("ResolveTokenAndDefaultMeta", mock.Anything, mock.Anything, mock.Anything).
 		Return(testutils.ACLsDisabled(t), nil).
 		Run(func(args mock.Arguments) {
@@ -76,7 +81,7 @@ func testServer(t *testing.T) *Server {
 		})
 
 	// Mock the tenancy bridge since we can't use the real thing.
-	mockTenancyBridge := &MockTenancyBridge{}
+	mockTenancyBridge := &svc.MockTenancyBridge{}
 	mockTenancyBridge.On("PartitionExists", resource.DefaultPartitionName).Return(true, nil)
 	mockTenancyBridge.On("NamespaceExists", resource.DefaultPartitionName, resource.DefaultNamespaceName).Return(true, nil)
 	mockTenancyBridge.On("PartitionExists", mock.Anything).Return(false, nil)
@@ -84,7 +89,7 @@ func testServer(t *testing.T) *Server {
 	mockTenancyBridge.On("IsPartitionMarkedForDeletion", resource.DefaultPartitionName).Return(false, nil)
 	mockTenancyBridge.On("IsNamespaceMarkedForDeletion", resource.DefaultPartitionName, resource.DefaultNamespaceName).Return(false, nil)
 
-	return NewServer(Config{
+	return svc.NewServer(svc.Config{
 		Logger:        testutil.Logger(t),
 		Registry:      resource.NewRegistry(),
 		Backend:       backend,
@@ -93,7 +98,8 @@ func testServer(t *testing.T) *Server {
 	})
 }
 
-func testClient(t *testing.T, server *Server) pbresource.ResourceServiceClient {
+// Deprecated: use NewResourceServiceBuilder instead
+func testClient(t *testing.T, server *svc.Server) pbresource.ResourceServiceClient {
 	t.Helper()
 
 	addr := testutils.RunTestServer(t, server)
@@ -146,7 +152,6 @@ func wildcardTenancyCases() map[string]struct {
 			tenancy: &pbresource.Tenancy{
 				Partition: "",
 				Namespace: resource.DefaultNamespaceName,
-				PeerName:  "local",
 			},
 		},
 		"namespaced type with empty namespace": {
@@ -154,16 +159,6 @@ func wildcardTenancyCases() map[string]struct {
 			tenancy: &pbresource.Tenancy{
 				Partition: resource.DefaultPartitionName,
 				Namespace: "",
-				PeerName:  "local",
-			},
-		},
-		// TODO(spatel): NET-5475 - Remove as part of peer_name moving to PeerTenancy
-		"namespaced type with empty peername": {
-			typ: demo.TypeV2Artist,
-			tenancy: &pbresource.Tenancy{
-				Partition: resource.DefaultPartitionName,
-				Namespace: resource.DefaultNamespaceName,
-				PeerName:  "",
 			},
 		},
 		"namespaced type with empty partition and namespace": {
@@ -171,7 +166,6 @@ func wildcardTenancyCases() map[string]struct {
 			tenancy: &pbresource.Tenancy{
 				Partition: "",
 				Namespace: "",
-				PeerName:  "local",
 			},
 		},
 		"namespaced type with wildcard partition and empty namespace": {
@@ -179,7 +173,6 @@ func wildcardTenancyCases() map[string]struct {
 			tenancy: &pbresource.Tenancy{
 				Partition: "*",
 				Namespace: "",
-				PeerName:  "local",
 			},
 		},
 		"namespaced type with empty partition and wildcard namespace": {
@@ -187,7 +180,6 @@ func wildcardTenancyCases() map[string]struct {
 			tenancy: &pbresource.Tenancy{
 				Partition: "",
 				Namespace: "*",
-				PeerName:  "local",
 			},
 		},
 		"partitioned type with empty partition": {
@@ -195,14 +187,34 @@ func wildcardTenancyCases() map[string]struct {
 			tenancy: &pbresource.Tenancy{
 				Partition: "",
 				Namespace: "",
-				PeerName:  "local",
 			},
 		},
 		"partitioned type with wildcard partition": {
 			typ: demo.TypeV1RecordLabel,
 			tenancy: &pbresource.Tenancy{
 				Partition: "*",
-				PeerName:  "local",
+			},
+		},
+		"partitioned type with wildcard partition and namespace": {
+			typ: demo.TypeV1RecordLabel,
+			tenancy: &pbresource.Tenancy{
+				Partition: "*",
+				Namespace: "*",
+			},
+		},
+		"cluster type with empty partition and namespace": {
+			typ: demo.TypeV1Executive,
+			tenancy: &pbresource.Tenancy{
+				Partition: "",
+				Namespace: "",
+			},
+		},
+
+		"cluster type with wildcard partition and namespace": {
+			typ: demo.TypeV1Executive,
+			tenancy: &pbresource.Tenancy{
+				Partition: "*",
+				Namespace: "*",
 			},
 		},
 	}
@@ -232,7 +244,7 @@ func tenancyCases() map[string]func(artistId, recordlabelId *pbresource.ID) *pbr
 			id.Tenancy.Namespace = ""
 			return id
 		},
-		"namespaced resource inherits tokens partition and namespace when tenacy nil": func(artistId, _ *pbresource.ID) *pbresource.ID {
+		"namespaced resource inherits tokens partition and namespace when tenancy nil": func(artistId, _ *pbresource.ID) *pbresource.ID {
 			id := clone(artistId)
 			id.Tenancy = nil
 			return id
@@ -253,3 +265,26 @@ func tenancyCases() map[string]func(artistId, recordlabelId *pbresource.ID) *pbr
 	}
 	return tenancyCases
 }
+
+type blockOnceBackend struct {
+	storage.Backend
+
+	done            uint32
+	readCompletedCh chan struct{}
+	blockCh         chan struct{}
+}
+
+func (b *blockOnceBackend) Read(ctx context.Context, consistency storage.ReadConsistency, id *pbresource.ID) (*pbresource.Resource, error) {
+	res, err := b.Backend.Read(ctx, consistency, id)
+
+	// Block for exactly one call to Read. All subsequent calls (including those
+	// concurrent to the blocked call) will return immediately.
+	if atomic.CompareAndSwapUint32(&b.done, 0, 1) {
+		close(b.readCompletedCh)
+		<-b.blockCh
+	}
+
+	return res, err
+}
+
+func clone[T proto.Message](v T) T { return proto.Clone(v).(T) }

@@ -17,16 +17,18 @@ import (
 )
 
 func TestLessReference(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
 	parseTenancy := func(s string) *pbresource.Tenancy {
-		// format is: <partition>.<peerName>.<namespace>
+		// format is: <partition>.<namespace>
 		parts := strings.Split(s, ".")
-		if len(parts) != 3 {
+		if len(parts) != 2 {
 			panic("bad tenancy")
 		}
 		return &pbresource.Tenancy{
 			Partition: parts[0],
-			PeerName:  parts[1],
-			Namespace: parts[2],
+			Namespace: parts[1],
 		}
 	}
 
@@ -36,7 +38,7 @@ func TestLessReference(t *testing.T) {
 		// - <type>/<tenancy>/<name>
 		//
 		// type = (gvk style)
-		// tenancy = <partition>.<peerName>.<namespace>
+		// tenancy = <partition>.<namespace>
 
 		parts := strings.Split(s, "/")
 		require.Len(t, parts, 3)
@@ -68,22 +70,20 @@ func TestLessReference(t *testing.T) {
 		for _, version := range vals {
 			for _, kind := range vals {
 				for _, partition := range vals {
-					for _, peer := range vals {
-						for _, namespace := range vals {
-							for _, name := range vals {
-								for _, section := range sectionVals {
-									if section != "" {
-										section = "@" + section
-									}
-									inputs = append(inputs, makeRef(
-										fmt.Sprintf(
-											"%s.%s.%s/%s.%s.%s/%s%s",
-											group, version, kind,
-											partition, peer, namespace,
-											name, section,
-										),
-									))
+					for _, namespace := range vals {
+						for _, name := range vals {
+							for _, section := range sectionVals {
+								if section != "" {
+									section = "@" + section
 								}
+								inputs = append(inputs, makeRef(
+									fmt.Sprintf(
+										"%s.%s.%s/%s.%s/%s%s",
+										group, version, kind,
+										partition, namespace,
+										name, section,
+									),
+								))
 							}
 						}
 					}

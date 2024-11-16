@@ -39,7 +39,6 @@
                           "urlPath": {
                             "path": {
                               "safeRegex": {
-                                "googleRe2": {},
                                 "regex": "/v[123]"
                               }
                             }
@@ -48,9 +47,10 @@
                         {
                           "header": {
                             "name": ":method",
-                            "safeRegexMatch": {
-                              "googleRe2": {},
-                              "regex": "GET|HEAD|OPTIONS"
+                            "stringMatch": {
+                              "safeRegex": {
+                                "regex": "GET|HEAD|OPTIONS"
+                              }
                             }
                           }
                         }
@@ -116,12 +116,55 @@
                         },
                         {
                           "header": {
+                            "name": "x-baz",
+                            "stringMatch": {
+                              "contains": "qux"
+                            }
+                          }
+                        },
+                        {
+                          "header": {
                             "name": "x-zim",
                             "stringMatch": {
                               "safeRegex": {
-                                "googleRe2": {},
                                 "regex": "gi[rR]"
                               }
+                            }
+                          }
+                        },
+                        {
+                          "header": {
+                            "name": "y-bar",
+                            "stringMatch": {
+                              "exact": "xyz",
+                              "ignoreCase": true
+                            }
+                          }
+                        },
+                        {
+                          "header": {
+                            "name": "y-dib",
+                            "stringMatch": {
+                              "ignoreCase": true,
+                              "prefix": "gaz"
+                            }
+                          }
+                        },
+                        {
+                          "header": {
+                            "name": "y-gir",
+                            "stringMatch": {
+                              "ignoreCase": true,
+                              "suffix": "zim"
+                            }
+                          }
+                        },
+                        {
+                          "header": {
+                            "name": "y-baz",
+                            "stringMatch": {
+                              "contains": "qux",
+                              "ignoreCase": true
                             }
                           }
                         },
@@ -162,10 +205,18 @@
                         {
                           "header": {
                             "invertMatch": true,
+                            "name": "z-baz",
+                            "stringMatch": {
+                              "contains": "qux"
+                            }
+                          }
+                        },
+                        {
+                          "header": {
+                            "invertMatch": true,
                             "name": "z-zim",
                             "stringMatch": {
                               "safeRegex": {
-                                "googleRe2": {},
                                 "regex": "gi[rR]"
                               }
                             }
@@ -182,7 +233,6 @@
                             "urlPath": {
                               "path": {
                                 "safeRegex": {
-                                  "googleRe2": {},
                                   "regex": "/v[123]"
                                 }
                               }
@@ -191,9 +241,10 @@
                           {
                             "header": {
                               "name": ":method",
-                              "safeRegexMatch": {
-                                "googleRe2": {},
-                                "regex": "GET|HEAD|OPTIONS"
+                              "stringMatch": {
+                                "safeRegex": {
+                                  "regex": "GET|HEAD|OPTIONS"
+                                }
                               }
                             }
                           }
@@ -228,7 +279,6 @@
               "authenticated": {
                 "principalName": {
                   "safeRegex": {
-                    "googleRe2": {},
                     "regex": "^spiffe://test.consul/ns/default/dc/[^/]+/svc/web$"
                   }
                 }

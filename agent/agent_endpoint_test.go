@@ -21,13 +21,14 @@ import (
 	"time"
 
 	"github.com/armon/go-metrics"
-	"github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/go-uuid"
-	"github.com/hashicorp/serf/serf"
 	"github.com/mitchellh/hashstructure"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
+
+	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/serf/serf"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/acl/resolver"
@@ -77,46 +78,6 @@ func createACLTokenWithAgentReadPolicy(t *testing.T, srv *HTTPHandlers) string {
 	err := dec.Decode(svcToken)
 	require.NoError(t, err)
 	return svcToken.SecretID
-}
-
-func TestAgentEndpointsFailInV2(t *testing.T) {
-	t.Parallel()
-
-	a := NewTestAgent(t, `experiments = ["resource-apis"]`)
-
-	checkRequest := func(method, url string) {
-		t.Run(method+" "+url, func(t *testing.T) {
-			assertV1CatalogEndpointDoesNotWorkWithV2(t, a, method, url, `{}`)
-		})
-	}
-
-	t.Run("agent-self-with-params", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/v1/agent/self?dc=dc1", nil)
-		require.NoError(t, err)
-
-		resp := httptest.NewRecorder()
-		a.srv.h.ServeHTTP(resp, req)
-		require.Equal(t, http.StatusOK, resp.Code)
-
-		_, err = io.ReadAll(resp.Body)
-		require.NoError(t, err)
-	})
-
-	checkRequest("PUT", "/v1/agent/maintenance")
-	checkRequest("GET", "/v1/agent/services")
-	checkRequest("GET", "/v1/agent/service/web")
-	checkRequest("GET", "/v1/agent/checks")
-	checkRequest("GET", "/v1/agent/health/service/id/web")
-	checkRequest("GET", "/v1/agent/health/service/name/web")
-	checkRequest("PUT", "/v1/agent/check/register")
-	checkRequest("PUT", "/v1/agent/check/deregister/web")
-	checkRequest("PUT", "/v1/agent/check/pass/web")
-	checkRequest("PUT", "/v1/agent/check/warn/web")
-	checkRequest("PUT", "/v1/agent/check/fail/web")
-	checkRequest("PUT", "/v1/agent/check/update/web")
-	checkRequest("PUT", "/v1/agent/service/register")
-	checkRequest("PUT", "/v1/agent/service/deregister/web")
-	checkRequest("PUT", "/v1/agent/service/maintenance/web")
 }
 
 func TestAgent_Services(t *testing.T) {
@@ -1660,6 +1621,7 @@ func newDefaultBaseDeps(t *testing.T) BaseDeps {
 }
 
 func TestHTTPHandlers_AgentMetricsStream_ACLDeny(t *testing.T) {
+	t.Skip("this test panics without a license manager in enterprise")
 	bd := newDefaultBaseDeps(t)
 	bd.Tokens = new(tokenStore.Store)
 	sink := metrics.NewInmemSink(30*time.Millisecond, time.Second)
@@ -1691,6 +1653,7 @@ func TestHTTPHandlers_AgentMetricsStream_ACLDeny(t *testing.T) {
 }
 
 func TestHTTPHandlers_AgentMetricsStream(t *testing.T) {
+	t.Skip("this test panics without a license manager in enterprise")
 	bd := newDefaultBaseDeps(t)
 	bd.Tokens = new(tokenStore.Store)
 	sink := metrics.NewInmemSink(20*time.Millisecond, time.Second)
@@ -1877,7 +1840,7 @@ func TestAgent_ReloadDoesNotTriggerWatch(t *testing.T) {
 	require.NoError(t, a.updateTTLCheck(checkID, api.HealthPassing, "testing-agent-reload-001"))
 
 	checkStr := func(r *retry.R, evaluator func(string) error) {
-		t.Helper()
+		r.Helper()
 		contentsStr := ""
 		// Wait for watch to be populated
 		for i := 1; i < 7; i++ {
@@ -1890,14 +1853,14 @@ func TestAgent_ReloadDoesNotTriggerWatch(t *testing.T) {
 				break
 			}
 			time.Sleep(time.Duration(i) * time.Second)
-			testutil.Logger(t).Info("Watch not yet populated, retrying")
+			testutil.Logger(r).Info("Watch not yet populated, retrying")
 		}
 		if err := evaluator(contentsStr); err != nil {
 			r.Errorf("ERROR: Test failing: %s", err)
 		}
 	}
 	ensureNothingCritical := func(r *retry.R, mustContain string) {
-		t.Helper()
+		r.Helper()
 		eval := func(contentsStr string) error {
 			if strings.Contains(contentsStr, "critical") {
 				return fmt.Errorf("MUST NOT contain critical:= %s", contentsStr)
@@ -1915,7 +1878,7 @@ func TestAgent_ReloadDoesNotTriggerWatch(t *testing.T) {
 	}
 
 	retry.RunWith(retriesWithDelay(), t, func(r *retry.R) {
-		testutil.Logger(t).Info("Consul is now ready")
+		testutil.Logger(r).Info("Consul is now ready")
 		// it should contain the output
 		checkStr(r, func(contentStr string) error {
 			if contentStr == "[]" {
@@ -4340,7 +4303,7 @@ func testDefaultSidecar(svc string, port int, fns ...func(*structs.NodeService))
 }
 
 // testCreateToken creates a Policy for the provided rules and a Token linked to that Policy.
-func testCreateToken(t *testing.T, a *TestAgent, rules string) string {
+func testCreateToken(t testutil.TestingTB, a *TestAgent, rules string) string {
 	policyName, err := uuid.GenerateUUID() // we just need a unique name for the test and UUIDs are definitely unique
 	require.NoError(t, err)
 
@@ -4369,7 +4332,7 @@ func testCreateToken(t *testing.T, a *TestAgent, rules string) string {
 	return aclResp.SecretID
 }
 
-func testCreatePolicy(t *testing.T, a *TestAgent, name, rules string) string {
+func testCreatePolicy(t testutil.TestingTB, a *TestAgent, name, rules string) string {
 	args := map[string]interface{}{
 		"Name":  name,
 		"Rules": rules,
@@ -8015,76 +7978,104 @@ func TestAgentConnectAuthorize_serviceWrite(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, resp.Code)
 }
 
-// Test when no intentions match w/ a default deny policy
-func TestAgentConnectAuthorize_defaultDeny(t *testing.T) {
+func TestAgentConnectAuthorize_DefaultIntentionPolicy(t *testing.T) {
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
 
 	t.Parallel()
 
-	a := NewTestAgent(t, TestACLConfig())
-	defer a.Shutdown()
-	testrpc.WaitForLeader(t, a.RPC, "dc1")
-
-	args := &structs.ConnectAuthorizeRequest{
-		Target:        "foo",
-		ClientCertURI: connect.TestSpiffeIDService(t, "web").URI().String(),
+	agentConfig := `primary_datacenter = "dc1"
+default_intention_policy = "%s"
+`
+	aclBlock := `acl {
+	enabled = true
+	default_policy = "%s"
+	tokens {
+		initial_management = "root"
+		agent = "root"
+		agent_recovery = "towel"
 	}
-	req, _ := http.NewRequest("POST", "/v1/agent/connect/authorize", jsonReader(args))
-	req.Header.Add("X-Consul-Token", "root")
-	resp := httptest.NewRecorder()
-	a.srv.h.ServeHTTP(resp, req)
-	assert.Equal(t, 200, resp.Code)
-
-	dec := json.NewDecoder(resp.Body)
-	obj := &connectAuthorizeResp{}
-	require.NoError(t, dec.Decode(obj))
-	assert.False(t, obj.Authorized)
-	assert.Contains(t, obj.Reason, "Default behavior")
 }
+`
 
-// Test when no intentions match w/ a default allow policy
-func TestAgentConnectAuthorize_defaultAllow(t *testing.T) {
-	if testing.Short() {
-		t.Skip("too slow for testing.Short")
+	type testcase struct {
+		aclsEnabled  bool
+		defaultACL   string
+		defaultIxn   string
+		expectAuthz  bool
+		expectReason string
 	}
+	tcs := map[string]testcase{
+		"no ACLs, default intention allow": {
+			aclsEnabled:  false,
+			defaultIxn:   "allow",
+			expectAuthz:  true,
+			expectReason: "Default intention policy",
+		},
+		"no ACLs, default intention deny": {
+			aclsEnabled:  false,
+			defaultIxn:   "deny",
+			expectAuthz:  false,
+			expectReason: "Default intention policy",
+		},
+		"ACL deny, no intention policy": {
+			aclsEnabled:  true,
+			defaultACL:   "deny",
+			expectAuthz:  false,
+			expectReason: "Default behavior configured by ACLs",
+		},
+		"ACL allow, no intention policy": {
+			aclsEnabled:  true,
+			defaultACL:   "allow",
+			expectAuthz:  true,
+			expectReason: "Default behavior configured by ACLs",
+		},
+		"ACL deny, default intentions allow": {
+			aclsEnabled:  true,
+			defaultACL:   "deny",
+			defaultIxn:   "allow",
+			expectAuthz:  true,
+			expectReason: "Default intention policy",
+		},
+		"ACL allow, default intentions deny": {
+			aclsEnabled:  true,
+			defaultACL:   "allow",
+			defaultIxn:   "deny",
+			expectAuthz:  false,
+			expectReason: "Default intention policy",
+		},
+	}
+	for name, tc := range tcs {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	t.Parallel()
-
-	dc1 := "dc1"
-	a := NewTestAgent(t, `
-		primary_datacenter = "`+dc1+`"
-
-		acl {
-			enabled = true
-			default_policy = "allow"
-
-			tokens {
-				initial_management = "root"
-				agent = "root"
-				agent_recovery = "towel"
+			conf := fmt.Sprintf(agentConfig, tc.defaultIxn)
+			if tc.aclsEnabled {
+				conf += fmt.Sprintf(aclBlock, tc.defaultACL)
 			}
-		}
-	`)
-	defer a.Shutdown()
-	testrpc.WaitForTestAgent(t, a.RPC, dc1)
+			a := NewTestAgent(t, conf)
 
-	args := &structs.ConnectAuthorizeRequest{
-		Target:        "foo",
-		ClientCertURI: connect.TestSpiffeIDService(t, "web").URI().String(),
+			testrpc.WaitForLeader(t, a.RPC, "dc1")
+
+			args := &structs.ConnectAuthorizeRequest{
+				Target:        "foo",
+				ClientCertURI: connect.TestSpiffeIDService(t, "web").URI().String(),
+			}
+			req, _ := http.NewRequest("POST", "/v1/agent/connect/authorize", jsonReader(args))
+			req.Header.Add("X-Consul-Token", "root")
+			resp := httptest.NewRecorder()
+			a.srv.h.ServeHTTP(resp, req)
+			assert.Equal(t, 200, resp.Code)
+
+			dec := json.NewDecoder(resp.Body)
+			obj := &connectAuthorizeResp{}
+			require.NoError(t, dec.Decode(obj))
+			assert.Equal(t, tc.expectAuthz, obj.Authorized)
+			assert.Contains(t, obj.Reason, tc.expectReason)
+		})
 	}
-	req, _ := http.NewRequest("POST", "/v1/agent/connect/authorize", jsonReader(args))
-	req.Header.Add("X-Consul-Token", "root")
-	resp := httptest.NewRecorder()
-	a.srv.h.ServeHTTP(resp, req)
-	assert.Equal(t, 200, resp.Code)
-
-	dec := json.NewDecoder(resp.Body)
-	obj := &connectAuthorizeResp{}
-	require.NoError(t, dec.Decode(obj))
-	assert.True(t, obj.Authorized)
-	assert.Contains(t, obj.Reason, "Default behavior")
 }
 
 func TestAgent_Host(t *testing.T) {

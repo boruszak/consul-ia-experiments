@@ -15,11 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/consul/internal/resource"
-
 	"github.com/google/tcpproxy"
-	"github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/go-uuid"
 	"github.com/stretchr/testify/require"
 	gogrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -27,6 +23,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-uuid"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/connect"
@@ -754,6 +753,7 @@ func TestPeeringService_Read(t *testing.T) {
 		PeerCAPems:          nil,
 		PeerServerName:      "test",
 		PeerServerAddresses: []string{"addr1"},
+		StreamStatus:        &pbpeering.StreamStatus{},
 	}
 	err := s.Server.FSM().State().PeeringWrite(10, &pbpeering.PeeringWriteRequest{Peering: p})
 	require.NoError(t, err)
@@ -815,6 +815,7 @@ func TestPeeringService_Read_ACLEnforcement(t *testing.T) {
 		PeerCAPems:          nil,
 		PeerServerName:      "test",
 		PeerServerAddresses: []string{"addr1"},
+		StreamStatus:        &pbpeering.StreamStatus{},
 	}
 	err := s.Server.FSM().State().PeeringWrite(10, &pbpeering.PeeringWriteRequest{Peering: p})
 	require.NoError(t, err)
@@ -879,8 +880,10 @@ func TestPeeringService_Read_Blocking(t *testing.T) {
 		PeerCAPems:          nil,
 		PeerServerName:      "test",
 		PeerServerAddresses: []string{"addr1"},
+		StreamStatus:        &pbpeering.StreamStatus{},
 	}
-	err := s.Server.FSM().State().PeeringWrite(lastIdx, &pbpeering.PeeringWriteRequest{Peering: p})
+	toWrite := proto.Clone(p).(*pbpeering.Peering)
+	err := s.Server.FSM().State().PeeringWrite(lastIdx, &pbpeering.PeeringWriteRequest{Peering: toWrite})
 	require.NoError(t, err)
 
 	client := pbpeering.NewPeeringServiceClient(s.ClientConn(t))
@@ -891,37 +894,44 @@ func TestPeeringService_Read_Blocking(t *testing.T) {
 
 	options := structs.QueryOptions{
 		MinQueryIndex: lastIdx,
-		MaxQueryTime:  1 * time.Second,
+		MaxQueryTime:  10 * time.Second,
 	}
 	ctx, err = external.ContextWithQueryOptions(ctx, options)
 	require.NoError(t, err)
 
 	// Mutate the original peering
-	p = proto.Clone(p).(*pbpeering.Peering)
 	p.PeerServerAddresses = append(p.PeerServerAddresses, "addr2")
 
 	// Async change to trigger update
-	marker := time.Now()
+	recvChan := make(chan *pbpeering.PeeringReadResponse)
+	errChan := make(chan error)
+	var header metadata.MD
 	go func() {
-		time.Sleep(100 * time.Millisecond)
-		lastIdx++
-		require.NoError(t, s.Server.FSM().State().PeeringWrite(lastIdx, &pbpeering.PeeringWriteRequest{Peering: p}))
+		resp, err := client.PeeringRead(ctx, &pbpeering.PeeringReadRequest{Name: "foo"}, gogrpc.Header(&header))
+		if err != nil {
+			errChan <- err
+			return
+		}
+		recvChan <- resp
 	}()
 
-	var header metadata.MD
-	resp, err := client.PeeringRead(ctx, &pbpeering.PeeringReadRequest{Name: "foo"}, gogrpc.Header(&header))
-	require.NoError(t, err)
+	lastIdx++
+	toWrite = proto.Clone(p).(*pbpeering.Peering)
+	require.NoError(t, s.Server.FSM().State().PeeringWrite(lastIdx, &pbpeering.PeeringWriteRequest{Peering: toWrite}))
 
-	// The query should return after the async change, but before the timeout
-	require.True(t, time.Since(marker) >= 100*time.Millisecond)
-	require.True(t, time.Since(marker) < 1*time.Second)
-
-	// Verify query results
-	meta, err := external.QueryMetaFromGRPCMeta(header)
-	require.NoError(t, err)
-	require.Equal(t, lastIdx, meta.Index)
-
-	prototest.AssertDeepEqual(t, p, resp.Peering)
+	select {
+	case err := <-errChan:
+		require.NoError(t, err)
+	case resp := <-recvChan:
+		meta, err := external.QueryMetaFromGRPCMeta(header)
+		require.NoError(t, err)
+		require.Equal(t, lastIdx, meta.Index)
+		resp.Peering.CreateIndex = 0
+		resp.Peering.ModifyIndex = 0
+		prototest.AssertDeepEqual(t, p, resp.Peering)
+	case <-time.After(2 * time.Second):
+		t.Error("blocking query timed out while waiting")
+	}
 }
 
 func TestPeeringService_Delete(t *testing.T) {
@@ -1064,6 +1074,7 @@ func TestPeeringService_List(t *testing.T) {
 		PeerCAPems:          nil,
 		PeerServerName:      "fooservername",
 		PeerServerAddresses: []string{"addr1"},
+		StreamStatus:        &pbpeering.StreamStatus{},
 	}
 	require.NoError(t, s.Server.FSM().State().PeeringWrite(lastIdx, &pbpeering.PeeringWriteRequest{Peering: foo}))
 
@@ -1075,6 +1086,7 @@ func TestPeeringService_List(t *testing.T) {
 		PeerCAPems:          nil,
 		PeerServerName:      "barservername",
 		PeerServerAddresses: []string{"addr1"},
+		StreamStatus:        &pbpeering.StreamStatus{},
 	}
 	require.NoError(t, s.Server.FSM().State().PeeringWrite(lastIdx, &pbpeering.PeeringWriteRequest{Peering: bar}))
 
@@ -1120,6 +1132,7 @@ func TestPeeringService_List(t *testing.T) {
 			PeerCAPems:          nil,
 			PeerServerName:      "bazservername",
 			PeerServerAddresses: []string{"addr1"},
+			StreamStatus:        &pbpeering.StreamStatus{},
 		}
 		go func() {
 			time.Sleep(100 * time.Millisecond)
@@ -1166,6 +1179,7 @@ func TestPeeringService_List_ACLEnforcement(t *testing.T) {
 		PeerCAPems:          nil,
 		PeerServerName:      "fooservername",
 		PeerServerAddresses: []string{"addr1"},
+		StreamStatus:        &pbpeering.StreamStatus{},
 	}
 	require.NoError(t, s.Server.FSM().State().PeeringWrite(10, &pbpeering.PeeringWriteRequest{Peering: foo}))
 	bar := &pbpeering.Peering{
@@ -1175,6 +1189,7 @@ func TestPeeringService_List_ACLEnforcement(t *testing.T) {
 		PeerCAPems:          nil,
 		PeerServerName:      "barservername",
 		PeerServerAddresses: []string{"addr1"},
+		StreamStatus:        &pbpeering.StreamStatus{},
 	}
 	require.NoError(t, s.Server.FSM().State().PeeringWrite(15, &pbpeering.PeeringWriteRequest{Peering: bar}))
 
@@ -1819,9 +1834,9 @@ func newTestServer(t *testing.T, cb func(conf *consul.Config)) testingServer {
 	conf.ACLResolverSettings.EnterpriseMeta = *conf.AgentEnterpriseMeta()
 
 	deps := newDefaultDeps(t, conf)
-	externalGRPCServer := external.NewServer(deps.Logger, nil, deps.TLSConfigurator, rate.NullRequestLimitsHandler(), keepalive.ServerParameters{})
+	externalGRPCServer := external.NewServer(deps.Logger, nil, deps.TLSConfigurator, rate.NullRequestLimitsHandler(), keepalive.ServerParameters{}, nil)
 
-	server, err := consul.NewServer(conf, deps, externalGRPCServer, nil, deps.Logger, nil)
+	server, err := consul.NewServer(conf, deps, externalGRPCServer, nil, deps.Logger)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, server.Shutdown())
@@ -1953,7 +1968,7 @@ func newDefaultDeps(t *testing.T, c *consul.Config) consul.Deps {
 		NewRequestRecorderFunc:   middleware.NewRequestRecorder,
 		GetNetRPCInterceptorFunc: middleware.GetNetRPCInterceptor,
 		XDSStreamLimiter:         limiter.NewSessionLimiter(),
-		Registry:                 resource.NewRegistry(),
+		Registry:                 consul.NewTypeRegistry(),
 	}
 }
 

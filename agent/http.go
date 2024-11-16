@@ -6,6 +6,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/hashicorp/go-hclog"
 	"io"
 	"net"
 	"net/http"
@@ -22,11 +23,12 @@ import (
 	"github.com/NYTimes/gziphandler"
 	"github.com/armon/go-metrics"
 	"github.com/armon/go-metrics/prometheus"
-	"github.com/hashicorp/go-cleanhttp"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/hashicorp/go-cleanhttp"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/cache"
@@ -40,6 +42,11 @@ import (
 	"github.com/hashicorp/consul/lib"
 	"github.com/hashicorp/consul/logging"
 	"github.com/hashicorp/consul/proto/private/pbcommon"
+)
+
+const (
+	contentTypeHeader = "Content-Type"
+	plainContentType  = "text/plain; charset=utf-8"
 )
 
 var HTTPSummaries = []prometheus.SummaryDefinition{
@@ -188,7 +195,9 @@ func (s *HTTPHandlers) handler() http.Handler {
 		// Register the wrapper.
 		wrapper := func(resp http.ResponseWriter, req *http.Request) {
 			start := time.Now()
-			handler(resp, req)
+
+			// this method is implemented by different flavours of consul e.g. oss, ce. ent.
+			s.enterpriseRequest(resp, req, handler)
 
 			labels := []metrics.Label{{Name: "method", Value: req.Method}, {Name: "path", Value: path_label}}
 			metrics.MeasureSinceWithLabels([]string{"api", "http"}, start, labels)
@@ -217,6 +226,7 @@ func (s *HTTPHandlers) handler() http.Handler {
 			// If enableDebug register wrapped pprof handlers
 			if !s.agent.enableDebug.Load() && s.checkACLDisabled() {
 				resp.WriteHeader(http.StatusNotFound)
+				resp.Header().Set(contentTypeHeader, plainContentType)
 				return
 			}
 
@@ -225,6 +235,7 @@ func (s *HTTPHandlers) handler() http.Handler {
 
 			authz, err := s.agent.delegate.ResolveTokenAndDefaultMeta(token, nil, nil)
 			if err != nil {
+				resp.Header().Set(contentTypeHeader, plainContentType)
 				resp.WriteHeader(http.StatusForbidden)
 				return
 			}
@@ -234,6 +245,7 @@ func (s *HTTPHandlers) handler() http.Handler {
 			// TODO(partitions): should this be possible in a partition?
 			// TODO(acl-error-enhancements): We should return error details somehow here.
 			if authz.OperatorRead(nil) != acl.Allow {
+				resp.Header().Set(contentTypeHeader, plainContentType)
 				resp.WriteHeader(http.StatusForbidden)
 				return
 			}
@@ -260,9 +272,11 @@ func (s *HTTPHandlers) handler() http.Handler {
 	handlePProf("/debug/pprof/symbol", pprof.Symbol)
 	handlePProf("/debug/pprof/trace", pprof.Trace)
 
-	mux.Handle("/api/",
-		http.StripPrefix("/api",
+	resourceAPIPrefix := "/api"
+	mux.Handle(resourceAPIPrefix+"/",
+		http.StripPrefix(resourceAPIPrefix,
 			resourcehttp.NewHandler(
+				resourceAPIPrefix,
 				s.agent.delegate.ResourceServiceClient(),
 				s.agent.baseDeps.Registry,
 				s.parseToken,
@@ -311,8 +325,9 @@ func (s *HTTPHandlers) handler() http.Handler {
 		h = mux
 	}
 
-	h = s.enterpriseHandler(h)
 	h = withRemoteAddrHandler(h)
+	h = ensureContentTypeHeader(h, s.agent.logger)
+
 	s.h = &wrappedMux{
 		mux:     mux,
 		handler: h,
@@ -330,6 +345,20 @@ func withRemoteAddrHandler(next http.Handler) http.Handler {
 			req = req.WithContext(ctx)
 		}
 		next.ServeHTTP(resp, req)
+	})
+}
+
+// Injects content type explicitly if not already set into response to prevent XSS
+func ensureContentTypeHeader(next http.Handler, logger hclog.Logger) http.Handler {
+
+	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+		next.ServeHTTP(resp, req)
+
+		val := resp.Header().Get(contentTypeHeader)
+		if val == "" {
+			resp.Header().Set(contentTypeHeader, plainContentType)
+			logger.Debug("warning: content-type header not explicitly set.", "request-path", req.URL)
+		}
 	})
 }
 
@@ -376,6 +405,8 @@ func (s *HTTPHandlers) wrap(handler endpoint, methods []string) http.HandlerFunc
 				"from", req.RemoteAddr,
 				"error", err,
 			)
+			//set response type to plain to prevent XSS
+			resp.Header().Set(contentTypeHeader, plainContentType)
 			resp.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -389,15 +420,10 @@ func (s *HTTPHandlers) wrap(handler endpoint, methods []string) http.HandlerFunc
 				logURL = strings.Replace(logURL, token, "<hidden>", -1)
 			}
 			httpLogger.Warn("This request used the token query parameter "+
-				"which is deprecated and will be removed in Consul 1.17",
+				"which is deprecated and will be removed in a future Consul version",
 				"logUrl", logURL)
 		}
 		logURL = aclEndpointRE.ReplaceAllString(logURL, "$1<hidden>$4")
-
-		rejectCatalogV1Endpoint := false
-		if s.agent.baseDeps.UseV2Resources() {
-			rejectCatalogV1Endpoint = isV1CatalogRequest(req.URL.Path)
-		}
 
 		if s.denylist.Block(req.URL.Path) {
 			errMsg := "Endpoint is blocked by agent configuration"
@@ -407,6 +433,8 @@ func (s *HTTPHandlers) wrap(handler endpoint, methods []string) http.HandlerFunc
 				"from", req.RemoteAddr,
 				"error", errMsg,
 			)
+			//set response type to plain to prevent XSS
+			resp.Header().Set(contentTypeHeader, plainContentType)
 			resp.WriteHeader(http.StatusForbidden)
 			fmt.Fprint(resp, errMsg)
 			return
@@ -460,14 +488,6 @@ func (s *HTTPHandlers) wrap(handler endpoint, methods []string) http.HandlerFunc
 			return strings.Contains(err.Error(), rate.ErrRetryLater.Error())
 		}
 
-		isUsingV2CatalogExperiment := func(err error) bool {
-			if err == nil {
-				return false
-			}
-
-			return structs.IsErrUsingV2CatalogExperiment(err)
-		}
-
 		isMethodNotAllowed := func(err error) bool {
 			_, ok := err.(MethodNotAllowedError)
 			return ok
@@ -501,10 +521,6 @@ func (s *HTTPHandlers) wrap(handler endpoint, methods []string) http.HandlerFunc
 			msg := err.Error()
 			if s, ok := status.FromError(err); ok {
 				msg = s.Message()
-			}
-
-			if isUsingV2CatalogExperiment(err) && !isHTTPError(err) {
-				err = newRejectV1RequestWhenV2EnabledError()
 			}
 
 			switch {
@@ -583,12 +599,7 @@ func (s *HTTPHandlers) wrap(handler endpoint, methods []string) http.HandlerFunc
 
 			if err == nil {
 				// Invoke the handler
-				if rejectCatalogV1Endpoint {
-					obj = nil
-					err = s.rejectV1RequestWhenV2Enabled()
-				} else {
-					obj, err = handler(resp, req)
-				}
+				obj, err = handler(resp, req)
 			}
 		}
 		contentType := "application/json"
@@ -603,6 +614,8 @@ func (s *HTTPHandlers) wrap(handler endpoint, methods []string) http.HandlerFunc
 					resp.Header().Add("X-Consul-Reason", errPayload.Reason)
 				}
 			} else {
+				//set response type to plain to prevent XSS
+				resp.Header().Set(contentTypeHeader, plainContentType)
 				handleErr(err)
 				return
 			}
@@ -614,6 +627,8 @@ func (s *HTTPHandlers) wrap(handler endpoint, methods []string) http.HandlerFunc
 		if contentType == "application/json" {
 			buf, err = s.marshalJSON(req, obj)
 			if err != nil {
+				//set response type to plain to prevent XSS
+				resp.Header().Set(contentTypeHeader, plainContentType)
 				handleErr(err)
 				return
 			}
@@ -624,49 +639,9 @@ func (s *HTTPHandlers) wrap(handler endpoint, methods []string) http.HandlerFunc
 				}
 			}
 		}
-		resp.Header().Set("Content-Type", contentType)
+		resp.Header().Set(contentTypeHeader, contentType)
 		resp.WriteHeader(httpCode)
 		resp.Write(buf)
-	}
-}
-
-func isV1CatalogRequest(logURL string) bool {
-	switch {
-	case strings.HasPrefix(logURL, "/v1/catalog/"),
-		strings.HasPrefix(logURL, "/v1/health/"),
-		strings.HasPrefix(logURL, "/v1/config/"):
-		return true
-
-	case strings.HasPrefix(logURL, "/v1/agent/token/"),
-		logURL == "/v1/agent/self",
-		logURL == "/v1/agent/host",
-		logURL == "/v1/agent/version",
-		logURL == "/v1/agent/reload",
-		logURL == "/v1/agent/monitor",
-		logURL == "/v1/agent/metrics",
-		logURL == "/v1/agent/metrics/stream",
-		logURL == "/v1/agent/members",
-		strings.HasPrefix(logURL, "/v1/agent/join/"),
-		logURL == "/v1/agent/leave",
-		strings.HasPrefix(logURL, "/v1/agent/force-leave/"),
-		logURL == "/v1/agent/connect/authorize",
-		logURL == "/v1/agent/connect/ca/roots",
-		strings.HasPrefix(logURL, "/v1/agent/connect/ca/leaf/"):
-		return false
-
-	case strings.HasPrefix(logURL, "/v1/agent/"):
-		return true
-
-	case logURL == "/v1/internal/acl/authorize",
-		logURL == "/v1/internal/service-virtual-ip",
-		logURL == "/v1/internal/ui/oidc-auth-methods",
-		strings.HasPrefix(logURL, "/v1/internal/ui/metrics-proxy/"):
-		return false
-
-	case strings.HasPrefix(logURL, "/v1/internal/"):
-		return true
-	default:
-		return false
 	}
 }
 
@@ -736,7 +711,7 @@ func decodeBody(body io.Reader, out interface{}) error {
 	return lib.DecodeJSON(body, out)
 }
 
-// decodeBodyDeprecated is deprecated, please ues decodeBody above.
+// decodeBodyDeprecated is deprecated, please use decodeBody above.
 // decodeBodyDeprecated is used to decode a JSON request body
 func decodeBodyDeprecated(req *http.Request, out interface{}, cb func(interface{}) error) error {
 	// This generally only happens in tests since real HTTP requests set
@@ -1146,20 +1121,6 @@ func (s *HTTPHandlers) parseToken(req *http.Request, token *string) {
 	s.parseTokenWithDefault(req, token)
 }
 
-func (s *HTTPHandlers) rejectV1RequestWhenV2Enabled() error {
-	if s.agent.baseDeps.UseV2Resources() {
-		return newRejectV1RequestWhenV2EnabledError()
-	}
-	return nil
-}
-
-func newRejectV1RequestWhenV2EnabledError() error {
-	return HTTPError{
-		StatusCode: http.StatusBadRequest,
-		Reason:     structs.ErrUsingV2CatalogExperiment.Error(),
-	}
-}
-
 func sourceAddrFromRequest(req *http.Request) string {
 	xff := req.Header.Get("X-Forwarded-For")
 	forwardHosts := strings.Split(xff, ",")
@@ -1202,6 +1163,15 @@ func (s *HTTPHandlers) parseSource(req *http.Request, source *structs.QuerySourc
 func (s *HTTPHandlers) parsePeerName(req *http.Request, args *structs.ServiceSpecificRequest) {
 	if peer := req.URL.Query().Get("peer"); peer != "" {
 		args.PeerName = peer
+	}
+}
+
+func (s *HTTPHandlers) parseSamenessGroup(req *http.Request, args *structs.ServiceSpecificRequest) {
+	if sg := req.URL.Query().Get("sg"); sg != "" {
+		args.SamenessGroup = sg
+	}
+	if sg := req.URL.Query().Get("sameness-group"); sg != "" {
+		args.SamenessGroup = sg
 	}
 }
 

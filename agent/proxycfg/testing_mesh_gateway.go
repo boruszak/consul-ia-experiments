@@ -264,6 +264,25 @@ func TestConfigSnapshotMeshGateway(t testing.T, variant string, nsFn func(ns *st
 				},
 			},
 		})
+	case "limits-added":
+		extraUpdates = append(extraUpdates, UpdateEvent{
+			CorrelationID: serviceDefaultsWatchID,
+			Result: &structs.ConfigEntryResponse{
+				Entry: &structs.ServiceConfigEntry{
+					Kind: structs.ServiceDefaults,
+					Name: "mesh-gateway",
+					UpstreamConfig: &structs.UpstreamConfiguration{
+						Defaults: &structs.UpstreamConfig{
+							Limits: &structs.UpstreamLimits{
+								MaxConnections:        pointerTo(1),
+								MaxPendingRequests:    pointerTo(10),
+								MaxConcurrentRequests: pointerTo(100),
+							},
+						},
+					},
+				},
+			},
+		})
 	default:
 		t.Fatalf("unknown variant: %s", variant)
 		return nil
@@ -649,6 +668,7 @@ func TestConfigSnapshotPeeredMeshGateway(t testing.T, variant string, nsFn func(
 		)
 	case "default-services-http":
 		proxyDefaults := &structs.ProxyConfigEntry{
+			Protocol: "http",
 			Config: map[string]interface{}{
 				"protocol": "http",
 			},
@@ -817,8 +837,9 @@ func TestConfigSnapshotPeeredMeshGateway(t testing.T, variant string, nsFn func(
 	case "chain-and-l7-stuff":
 		entries = []structs.ConfigEntry{
 			&structs.ProxyConfigEntry{
-				Kind: structs.ProxyDefaults,
-				Name: structs.ProxyConfigGlobal,
+				Kind:     structs.ProxyDefaults,
+				Name:     structs.ProxyConfigGlobal,
+				Protocol: "http",
 				Config: map[string]interface{}{
 					"protocol": "http",
 				},
@@ -1121,4 +1142,8 @@ func TestConfigSnapshotPeeredMeshGateway(t testing.T, variant string, nsFn func(
 			},
 		},
 	}, nsFn, nil, testSpliceEvents(baseEvents, extraUpdates))
+}
+
+func pointerTo[T any](v T) *T {
+	return &v
 }

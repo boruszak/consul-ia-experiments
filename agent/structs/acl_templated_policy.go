@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
-	"html/template"
+	"text/template"
 
-	"github.com/hashicorp/go-multierror"
 	"github.com/xeipuuv/gojsonschema"
 	"golang.org/x/exp/slices"
+
+	"github.com/hashicorp/go-multierror"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/api"
@@ -26,17 +27,26 @@ var ACLTemplatedPolicyNodeSchema string
 //go:embed acltemplatedpolicy/schemas/service.json
 var ACLTemplatedPolicyServiceSchema string
 
-//go:embed acltemplatedpolicy/schemas/workload-identity.json
-var ACLTemplatedPolicyWorkloadIdentitySchema string
+//go:embed acltemplatedpolicy/schemas/api-gateway.json
+var ACLTemplatedPolicyAPIGatewaySchema string
 
 type ACLTemplatedPolicies []*ACLTemplatedPolicy
 
 const (
-	ACLTemplatedPolicyServiceID          = "00000000-0000-0000-0000-000000000003"
-	ACLTemplatedPolicyNodeID             = "00000000-0000-0000-0000-000000000004"
-	ACLTemplatedPolicyDNSID              = "00000000-0000-0000-0000-000000000005"
-	ACLTemplatedPolicyNomadServerID      = "00000000-0000-0000-0000-000000000006"
-	ACLTemplatedPolicyWorkloadIdentityID = "00000000-0000-0000-0000-000000000007"
+	ACLTemplatedPolicyServiceID     = "00000000-0000-0000-0000-000000000003"
+	ACLTemplatedPolicyNodeID        = "00000000-0000-0000-0000-000000000004"
+	ACLTemplatedPolicyDNSID         = "00000000-0000-0000-0000-000000000005"
+	ACLTemplatedPolicyNomadServerID = "00000000-0000-0000-0000-000000000006"
+	_                               = "00000000-0000-0000-0000-000000000007" // formerly workload identity
+	ACLTemplatedPolicyAPIGatewayID  = "00000000-0000-0000-0000-000000000008"
+	ACLTemplatedPolicyNomadClientID = "00000000-0000-0000-0000-000000000009"
+
+	ACLTemplatedPolicyServiceDescription     = "Gives the token or role permissions to register a service and discover services in the Consul catalog. It also gives the specified service's sidecar proxy the permission to discover and route traffic to other services."
+	ACLTemplatedPolicyNodeDescription        = "Gives the token or role permissions for a register an agent/node into the catalog. A node is typically a consul agent but can also be a physical server, cloud instance or a container."
+	ACLTemplatedPolicyDNSDescription         = "Gives the token or role permissions for the Consul DNS to query services in the network."
+	ACLTemplatedPolicyNomadServerDescription = "Gives the token or role permissions required for integration with a nomad server."
+	ACLTemplatedPolicyAPIGatewayDescription  = "Gives the token or role permissions for a Consul api gateway"
+	ACLTemplatedPolicyNomadClientDescription = "Gives the token or role permissions required for integration with a nomad client."
 
 	ACLTemplatedPolicyNoRequiredVariablesSchema = "" // catch-all schema for all templated policy that don't require a schema
 )
@@ -48,6 +58,7 @@ type ACLTemplatedPolicyBase struct {
 	TemplateID   string
 	Schema       string
 	Template     string
+	Description  string
 }
 
 var (
@@ -59,30 +70,42 @@ var (
 			TemplateName: api.ACLTemplatedPolicyServiceName,
 			Schema:       ACLTemplatedPolicyServiceSchema,
 			Template:     ACLTemplatedPolicyService,
+			Description:  ACLTemplatedPolicyServiceDescription,
 		},
 		api.ACLTemplatedPolicyNodeName: {
 			TemplateID:   ACLTemplatedPolicyNodeID,
 			TemplateName: api.ACLTemplatedPolicyNodeName,
 			Schema:       ACLTemplatedPolicyNodeSchema,
 			Template:     ACLTemplatedPolicyNode,
+			Description:  ACLTemplatedPolicyNodeDescription,
 		},
 		api.ACLTemplatedPolicyDNSName: {
 			TemplateID:   ACLTemplatedPolicyDNSID,
 			TemplateName: api.ACLTemplatedPolicyDNSName,
 			Schema:       ACLTemplatedPolicyNoRequiredVariablesSchema,
 			Template:     ACLTemplatedPolicyDNS,
+			Description:  ACLTemplatedPolicyDNSDescription,
 		},
 		api.ACLTemplatedPolicyNomadServerName: {
 			TemplateID:   ACLTemplatedPolicyNomadServerID,
 			TemplateName: api.ACLTemplatedPolicyNomadServerName,
 			Schema:       ACLTemplatedPolicyNoRequiredVariablesSchema,
 			Template:     ACLTemplatedPolicyNomadServer,
+			Description:  ACLTemplatedPolicyNomadServerDescription,
 		},
-		api.ACLTemplatedPolicyWorkloadIdentityName: {
-			TemplateID:   ACLTemplatedPolicyWorkloadIdentityID,
-			TemplateName: api.ACLTemplatedPolicyWorkloadIdentityName,
-			Schema:       ACLTemplatedPolicyWorkloadIdentitySchema,
-			Template:     ACLTemplatedPolicyWorkloadIdentity,
+		api.ACLTemplatedPolicyAPIGatewayName: {
+			TemplateID:   ACLTemplatedPolicyAPIGatewayID,
+			TemplateName: api.ACLTemplatedPolicyAPIGatewayName,
+			Schema:       ACLTemplatedPolicyAPIGatewaySchema,
+			Template:     ACLTemplatedPolicyAPIGateway,
+			Description:  ACLTemplatedPolicyAPIGatewayDescription,
+		},
+		api.ACLTemplatedPolicyNomadClientName: {
+			TemplateID:   ACLTemplatedPolicyNomadClientID,
+			TemplateName: api.ACLTemplatedPolicyNomadClientName,
+			Schema:       ACLTemplatedPolicyNoRequiredVariablesSchema,
+			Template:     ACLTemplatedPolicyNomadClient,
+			Description:  ACLTemplatedPolicyNomadClientDescription,
 		},
 	}
 )
@@ -158,6 +181,17 @@ func (tp *ACLTemplatedPolicy) ValidateTemplatedPolicy(schema string) error {
 	res, err := gojsonschema.Validate(loader, dataloader)
 	if err != nil {
 		return fmt.Errorf("failed to load json schema for validation %w", err)
+	}
+
+	// validate service and node identity names
+	if tp.TemplateVariables != nil {
+		if tp.TemplateName == api.ACLTemplatedPolicyServiceName && !acl.IsValidServiceIdentityName(tp.TemplateVariables.Name) {
+			return fmt.Errorf("service identity %q has an invalid name. Only lowercase alphanumeric characters, '-' and '_' are allowed", tp.TemplateVariables.Name)
+		}
+
+		if tp.TemplateName == api.ACLTemplatedPolicyNodeName && !acl.IsValidNodeIdentityName(tp.TemplateVariables.Name) {
+			return fmt.Errorf("node identity %q  has an invalid name. Only lowercase alphanumeric characters, '-' and '_' are allowed", tp.TemplateVariables.Name)
+		}
 	}
 
 	if res.Valid() {

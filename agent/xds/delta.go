@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -17,31 +18,34 @@ import (
 	envoy_config_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_listener_v3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	envoy_discovery_v3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
-	"github.com/hashicorp/go-hclog"
-	goversion "github.com/hashicorp/go-version"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/hashicorp/go-hclog"
+	goversion "github.com/hashicorp/go-version"
+
 	"github.com/hashicorp/consul/agent/envoyextensions"
 	external "github.com/hashicorp/consul/agent/grpc-external"
 	"github.com/hashicorp/consul/agent/grpc-external/limiter"
 	"github.com/hashicorp/consul/agent/proxycfg"
+	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/agent/xds/configfetcher"
 	"github.com/hashicorp/consul/agent/xds/extensionruntime"
-	"github.com/hashicorp/consul/agent/xdsv2"
 	"github.com/hashicorp/consul/envoyextensions/extensioncommon"
 	"github.com/hashicorp/consul/envoyextensions/xdscommon"
-	proxysnapshot "github.com/hashicorp/consul/internal/mesh/proxy-snapshot"
-	proxytracker "github.com/hashicorp/consul/internal/mesh/proxy-tracker"
 	"github.com/hashicorp/consul/logging"
-	pbmesh "github.com/hashicorp/consul/proto-public/pbmesh/v2beta1"
-	"github.com/hashicorp/consul/proto-public/pbresource"
 	"github.com/hashicorp/consul/version"
 )
 
 var errOverwhelmed = status.Error(codes.ResourceExhausted, "this server has too many xDS streams open, please try another")
+var errConfigSyncError = status.Errorf(codes.Internal, "config-source sync loop terminated due to error")
+
+// xdsProtocolLegacyChildResend enables the legacy behavior for the `ensureChildResend` function.
+// This environment variable exists as an escape hatch so that users can disable the behavior, if needed.
+// Ideally, this is a flag we can remove in 1.19+
+var xdsProtocolLegacyChildResend = (os.Getenv("XDS_PROTOCOL_LEGACY_CHILD_RESEND") != "")
 
 type deltaRecvResponse int
 
@@ -73,7 +77,10 @@ func (s *Server) DeltaAggregatedResources(stream ADSDeltaStream) error {
 				close(reqCh)
 				return
 			}
-			reqCh <- req
+			select {
+			case <-stream.Context().Done():
+			case reqCh <- req:
+			}
 		}
 	}()
 
@@ -89,36 +96,14 @@ func (s *Server) DeltaAggregatedResources(stream ADSDeltaStream) error {
 }
 
 // getEnvoyConfiguration is a utility function that instantiates the proper
-// Envoy resource generator based on whether it was passed a ConfigSource or
-// ProxyState implementation of the ProxySnapshot interface and returns the
-// generated Envoy configuration.
-func getEnvoyConfiguration(proxySnapshot proxysnapshot.ProxySnapshot, logger hclog.Logger, cfgFetcher configfetcher.ConfigFetcher) (map[string][]proto.Message, error) {
-	switch proxySnapshot.(type) {
-	case *proxycfg.ConfigSnapshot:
-		logger.Trace("ProxySnapshot update channel received a ProxySnapshot of type ConfigSnapshot")
-		generator := NewResourceGenerator(
-			logger,
-			cfgFetcher,
-			true,
-		)
-
-		c := proxySnapshot.(*proxycfg.ConfigSnapshot)
-		return generator.AllResourcesFromSnapshot(c)
-	case *proxytracker.ProxyState:
-		logger.Trace("ProxySnapshot update channel received a ProxySnapshot of type ProxyState")
-		generator := xdsv2.NewResourceGenerator(
-			logger,
-		)
-		c := proxySnapshot.(*proxytracker.ProxyState)
-		resources, err := generator.AllResourcesFromIR(c)
-		if err != nil {
-			logger.Error("error generating resources from proxy state template", "err", err)
-			return nil, err
-		}
-		return resources, nil
-	default:
-		return nil, errors.New("proxysnapshot must be of type ProxyState or ConfigSnapshot")
-	}
+// Envoy resource generator and returns the generated Envoy configuration.
+func getEnvoyConfiguration(snapshot *proxycfg.ConfigSnapshot, logger hclog.Logger, cfgFetcher configfetcher.ConfigFetcher) (map[string][]proto.Message, error) {
+	generator := NewResourceGenerator(
+		logger,
+		cfgFetcher,
+		true,
+	)
+	return generator.AllResourcesFromSnapshot(snapshot)
 }
 
 const (
@@ -135,13 +120,14 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 
 	// Loop state
 	var (
-		proxySnapshot proxysnapshot.ProxySnapshot
-		node          *envoy_config_core_v3.Node
-		stateCh       <-chan proxysnapshot.ProxySnapshot
-		drainCh       limiter.SessionTerminatedChan
-		watchCancel   func()
-		nonce         uint64 // xDS requires a unique nonce to correlate response/request pairs
-		ready         bool   // set to true after the first snapshot arrives
+		snapshot         *proxycfg.ConfigSnapshot
+		node             *envoy_config_core_v3.Node
+		stateCh          <-chan *proxycfg.ConfigSnapshot
+		drainCh          limiter.SessionTerminatedChan
+		cfgSrcTerminated proxycfg.SrcTerminatedChan
+		watchCancel      func()
+		nonce            uint64 // xDS requires a unique nonce to correlate response/request pairs
+		ready            bool   // set to true after the first snapshot arrives
 
 		streamStartTime = time.Now()
 		streamStartOnce sync.Once
@@ -167,13 +153,13 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 	// Configure handlers for each type of request we currently care about.
 	handlers := map[string]*xDSDeltaType{
 		xdscommon.ListenerType: newDeltaType(logger, stream, xdscommon.ListenerType, func() bool {
-			return proxySnapshot.AllowEmptyListeners()
+			return snapshot.AllowEmptyListeners()
 		}),
 		xdscommon.RouteType: newDeltaType(logger, stream, xdscommon.RouteType, func() bool {
-			return proxySnapshot.AllowEmptyRoutes()
+			return snapshot.AllowEmptyRoutes()
 		}),
 		xdscommon.ClusterType: newDeltaType(logger, stream, xdscommon.ClusterType, func() bool {
-			return proxySnapshot.AllowEmptyClusters()
+			return snapshot.AllowEmptyClusters()
 		}),
 		xdscommon.EndpointType: newDeltaType(logger, stream, xdscommon.EndpointType, nil),
 		xdscommon.SecretType:   newDeltaType(logger, stream, xdscommon.SecretType, nil), // TODO allowEmptyFn
@@ -202,8 +188,8 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 		authTimer = time.After(s.AuthCheckFrequency)
 	}
 
-	checkStreamACLs := func(proxySnap proxysnapshot.ProxySnapshot) error {
-		return s.authorize(stream.Context(), proxySnap)
+	checkStreamACLs := func(snapshot *proxycfg.ConfigSnapshot) error {
+		return s.authorize(stream.Context(), snapshot)
 	}
 
 	for {
@@ -214,7 +200,7 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 			return errOverwhelmed
 		case <-authTimer:
 			// It's been too long since a Discovery{Request,Response} so recheck ACLs.
-			if err := checkStreamACLs(proxySnapshot); err != nil {
+			if err := checkStreamACLs(snapshot); err != nil {
 				return err
 			}
 			extendAuthTimer()
@@ -269,9 +255,9 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 				// would've already exited this loop.
 				return status.Error(codes.Aborted, "xDS stream terminated due to an irrecoverable error, please try again")
 			}
-			proxySnapshot = cs
+			snapshot = cs
 
-			newRes, err := getEnvoyConfiguration(proxySnapshot, logger, s.CfgFetcher)
+			newRes, err := getEnvoyConfiguration(snapshot, logger, s.CfgFetcher)
 			if err != nil {
 				return status.Errorf(codes.Unavailable, "failed to generate all xDS resources from the snapshot: %v", err)
 			}
@@ -283,7 +269,7 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 				s.ResourceMapMutateFn(newResourceMap)
 			}
 
-			if newResourceMap, err = s.applyEnvoyExtensions(newResourceMap, proxySnapshot, node); err != nil {
+			if newResourceMap, err = s.applyEnvoyExtensions(newResourceMap, snapshot, node); err != nil {
 				// err is already the result of calling status.Errorf
 				return err
 			}
@@ -300,6 +286,12 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 			resourceMap = newResourceMap
 			currentVersions = newVersions
 			ready = true
+		case <-cfgSrcTerminated:
+			// Ensure that we cancel and cleanup resources if the sync loop terminates for any reason.
+			// This is necessary to handle the scenario where an unexpected error occurs that the loop
+			// cannot recover from.
+			logger.Debug("config-source sync loop terminated due to error")
+			return errConfigSyncError
 		}
 
 		// Trigger state machine
@@ -317,7 +309,7 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 			}
 
 			// Start authentication process, we need the proxyID
-			proxyID := newResourceIDFromEnvoyNode(node)
+			proxyID := structs.NewServiceID(node.Id, parseEnterpriseMeta(node))
 
 			// Start watching config for that proxy
 			var err error
@@ -326,7 +318,7 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 				return status.Errorf(codes.Internal, "failed to watch proxy service: %s", err)
 			}
 
-			stateCh, drainCh, watchCancel, err = s.ProxyWatcher.Watch(proxyID, nodeName, options.Token)
+			stateCh, drainCh, cfgSrcTerminated, watchCancel, err = s.ProxyWatcher.Watch(proxyID, nodeName, options.Token)
 			switch {
 			case errors.Is(err, limiter.ErrCapacityReached):
 				return errOverwhelmed
@@ -340,14 +332,14 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 			// state machine.
 			defer watchCancel()
 
-			logger = logger.With("service_id", proxyID.Name) // enhance future logs
+			logger = logger.With("service_id", proxyID.String()) // enhance future logs
 
 			logger.Trace("watching proxy, pending initial proxycfg snapshot for xDS")
 
 			// Now wait for the config so we can check ACL
 			state = stateDeltaPendingInitialConfig
 		case stateDeltaPendingInitialConfig:
-			if proxySnapshot == nil {
+			if snapshot == nil {
 				// Nothing we can do until we get the initial config
 				continue
 			}
@@ -356,7 +348,7 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 			state = stateDeltaRunning
 
 			// Upgrade the logger
-			loggerName := proxySnapshot.LoggerName()
+			loggerName := snapshot.LoggerName()
 			if loggerName != "" {
 				logger = logger.Named(loggerName)
 			}
@@ -367,7 +359,7 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 			fallthrough
 		case stateDeltaRunning:
 			// Check ACLs on every Discovery{Request,Response}.
-			if err := checkStreamACLs(proxySnapshot); err != nil {
+			if err := checkStreamACLs(snapshot); err != nil {
 				return err
 			}
 			// For the first time through the state machine, this is when the
@@ -416,37 +408,7 @@ func (s *Server) processDelta(stream ADSDeltaStream, reqCh <-chan *envoy_discove
 	}
 }
 
-// newResourceIDFromEnvoyNode is a utility function that allows creating a
-// Resource ID from an Envoy proxy node so that existing delta calls can easily
-// use ProxyWatcher interface arguments for Watch().
-func newResourceIDFromEnvoyNode(node *envoy_config_core_v3.Node) *pbresource.ID {
-	entMeta := parseEnterpriseMeta(node)
-
-	return &pbresource.ID{
-		Name: node.Id,
-		Tenancy: &pbresource.Tenancy{
-			Namespace: entMeta.NamespaceOrDefault(),
-			Partition: entMeta.PartitionOrDefault(),
-		},
-		Type: pbmesh.ProxyStateTemplateType,
-	}
-}
-
-func (s *Server) applyEnvoyExtensions(resources *xdscommon.IndexedResources, proxySnapshot proxysnapshot.ProxySnapshot, node *envoy_config_core_v3.Node) (*xdscommon.IndexedResources, error) {
-	// TODO(proxystate)
-	// This is a workaround for now as envoy extensions are not yet supported with ProxyState.
-	// For now, we cast to proxycfg.ConfigSnapshot and no-op if it's the pbmesh.ProxyState type.
-	var snapshot *proxycfg.ConfigSnapshot
-	switch proxySnapshot.(type) {
-	//TODO(proxystate): implement envoy extensions for ProxyState
-	case *proxytracker.ProxyState:
-		return resources, nil
-	case *proxycfg.ConfigSnapshot:
-		snapshot = proxySnapshot.(*proxycfg.ConfigSnapshot)
-	default:
-		return nil, status.Errorf(codes.InvalidArgument,
-			"unsupported config snapshot type to apply envoy extensions to %T", proxySnapshot)
-	}
+func (s *Server) applyEnvoyExtensions(resources *xdscommon.IndexedResources, snapshot *proxycfg.ConfigSnapshot, node *envoy_config_core_v3.Node) (*xdscommon.IndexedResources, error) {
 	var err error
 	envoyVersion := xdscommon.DetermineEnvoyVersionFromNode(node)
 	consulVersion, err := goversion.NewVersion(version.Version)
@@ -1080,13 +1042,9 @@ func (t *xDSDeltaType) createDeltaResponse(
 }
 
 func (t *xDSDeltaType) ensureChildResend(parentName, childName string) {
-	if _, exist := t.deltaChild.childType.resourceVersions[childName]; !exist {
-		return
-	}
 	if !t.subscribed(childName) {
 		return
 	}
-
 	t.logger.Trace(
 		"triggering implicit update of resource",
 		"typeUrl", t.typeURL,
@@ -1094,11 +1052,41 @@ func (t *xDSDeltaType) ensureChildResend(parentName, childName string) {
 		"childTypeUrl", t.deltaChild.childType.typeURL,
 		"childResource", childName,
 	)
-
 	// resourceVersions tracks the last known version for this childName that Envoy
 	// has ACKed. By setting this to empty it effectively tells us that Envoy does
 	// not have any data for that child, and we need to re-send.
-	t.deltaChild.childType.resourceVersions[childName] = ""
+	if _, exist := t.deltaChild.childType.resourceVersions[childName]; exist {
+		t.deltaChild.childType.resourceVersions[childName] = ""
+	}
+
+	if xdsProtocolLegacyChildResend {
+		return
+		// TODO: This legacy behavior can be removed in 1.19, provided there are no outstanding issues.
+		//
+		// In this legacy mode, there is a confirmed race condition:
+		// - Send update endpoints
+		// - Send update cluster
+		// - Recv ACK endpoints
+		// - Recv ACK cluster
+		//
+		// When this situation happens, Envoy wipes the child endpoints when the cluster is updated,
+		// but it would never receive new ones. The endpoints would not be resent, because their hash
+		// never changed since the previous ACK.
+		//
+		// Due to ambiguity with the Envoy protocol [https://github.com/envoyproxy/envoy/issues/13009],
+		// it's difficult to state with certainty that no other unexpected side-effects are possible.
+		// This legacy escape hatch is left in-place in case some other complex race condition crops up.
+		//
+		// Longer-term, we should modify the hash of children to include the parent hash so that this
+		// behavior is implicitly handled, rather than being an edge case.
+	}
+
+	// pendingUpdates can contain newer versions that have been sent to Envoy but
+	// that we haven't processed an ACK for yet. These need to be cleared out, too,
+	// so that they aren't moved to resourceVersions by ack()
+	for nonce := range t.deltaChild.childType.pendingUpdates {
+		delete(t.deltaChild.childType.pendingUpdates[nonce], childName)
+	}
 }
 
 func computeResourceVersions(resourceMap *xdscommon.IndexedResources) (map[string]map[string]string, error) {

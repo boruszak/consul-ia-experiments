@@ -3,7 +3,7 @@
 > **Note**  
 > While the content of this document is still accurate, it doesn't cover the new
 > generic resource-oriented storage layer introduced in Consul 1.16. Please see
-> [Resources](../resources) for more information.
+> [Resources](../v2-architecture/controller-architecture) for more information.
 
 The cluser persistence subsystem runs entirely in Server Agents. It handles both read and
 write requests from the [RPC] subsystem. See the [Consul Architecture Guide] for an
@@ -40,6 +40,7 @@ use [bbolt].
 [boltdb]: https://github.com/boltdb/bolt
 [bbolt]: https://github.com/etcd-io/bbolt
 
+See [diagrams](#diagrams) below for more details on the interaction.
 
 ## State Store
 
@@ -111,3 +112,10 @@ storage.
 
 
 [hashicorp/raft-autopilot]: https://github.com/hashicorp/raft-autopilot
+
+## Diagrams
+### High-level life of a write
+![Overview](./write-overview.png)
+
+### Deep-dive into write through Raft
+![Deep dive](./write-deep-dive.png)

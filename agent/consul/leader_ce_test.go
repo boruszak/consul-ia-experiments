@@ -5,7 +5,9 @@
 
 package consul
 
-import libserf "github.com/hashicorp/consul/lib/serf"
+import (
+	"github.com/hashicorp/consul/internal/gossip/libserf"
+)
 
 func updateSerfTags(s *Server, key, value string) {
 	libserf.UpdateTag(s.serfLAN, key, value)

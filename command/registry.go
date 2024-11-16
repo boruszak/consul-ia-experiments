@@ -108,21 +108,28 @@ import (
 	"github.com/hashicorp/consul/command/peering"
 	peerdelete "github.com/hashicorp/consul/command/peering/delete"
 	peerestablish "github.com/hashicorp/consul/command/peering/establish"
+	peerexported "github.com/hashicorp/consul/command/peering/exportedservices"
 	peergenerate "github.com/hashicorp/consul/command/peering/generate"
 	peerlist "github.com/hashicorp/consul/command/peering/list"
 	peerread "github.com/hashicorp/consul/command/peering/read"
 	"github.com/hashicorp/consul/command/reload"
 	"github.com/hashicorp/consul/command/resource"
 	resourceapply "github.com/hashicorp/consul/command/resource/apply"
+	resourceapplygrpc "github.com/hashicorp/consul/command/resource/apply-grpc"
 	resourcedelete "github.com/hashicorp/consul/command/resource/delete"
+	resourcedeletegrpc "github.com/hashicorp/consul/command/resource/delete-grpc"
 	resourcelist "github.com/hashicorp/consul/command/resource/list"
+	resourcelistgrpc "github.com/hashicorp/consul/command/resource/list-grpc"
 	resourceread "github.com/hashicorp/consul/command/resource/read"
+	resourcereadgrpc "github.com/hashicorp/consul/command/resource/read-grpc"
 	"github.com/hashicorp/consul/command/rtt"
 	"github.com/hashicorp/consul/command/services"
 	svcsderegister "github.com/hashicorp/consul/command/services/deregister"
 	svcsexport "github.com/hashicorp/consul/command/services/export"
+	exportedservices "github.com/hashicorp/consul/command/services/exportedservices"
 	svcsregister "github.com/hashicorp/consul/command/services/register"
 	"github.com/hashicorp/consul/command/snapshot"
+	snapdecode "github.com/hashicorp/consul/command/snapshot/decode"
 	snapinspect "github.com/hashicorp/consul/command/snapshot/inspect"
 	snaprestore "github.com/hashicorp/consul/command/snapshot/restore"
 	snapsave "github.com/hashicorp/consul/command/snapshot/save"
@@ -132,6 +139,7 @@ import (
 	tlscert "github.com/hashicorp/consul/command/tls/cert"
 	tlscertcreate "github.com/hashicorp/consul/command/tls/cert/create"
 	"github.com/hashicorp/consul/command/troubleshoot"
+	troubleshootports "github.com/hashicorp/consul/command/troubleshoot/ports"
 	troubleshootproxy "github.com/hashicorp/consul/command/troubleshoot/proxy"
 	troubleshootupstreams "github.com/hashicorp/consul/command/troubleshoot/upstreams"
 	"github.com/hashicorp/consul/command/validate"
@@ -246,6 +254,7 @@ func RegisteredCommands(ui cli.Ui) map[string]mcli.CommandFactory {
 		entry{"operator usage instances", func(ui cli.Ui) (cli.Command, error) { return instances.New(ui), nil }},
 		entry{"peering", func(cli.Ui) (cli.Command, error) { return peering.New(), nil }},
 		entry{"peering delete", func(ui cli.Ui) (cli.Command, error) { return peerdelete.New(ui), nil }},
+		entry{"peering exported-services", func(ui cli.Ui) (cli.Command, error) { return peerexported.New(ui), nil }},
 		entry{"peering generate-token", func(ui cli.Ui) (cli.Command, error) { return peergenerate.New(ui), nil }},
 		entry{"peering establish", func(ui cli.Ui) (cli.Command, error) { return peerestablish.New(ui), nil }},
 		entry{"peering list", func(ui cli.Ui) (cli.Command, error) { return peerlist.New(ui), nil }},
@@ -255,13 +264,20 @@ func RegisteredCommands(ui cli.Ui) map[string]mcli.CommandFactory {
 		entry{"resource read", func(ui cli.Ui) (cli.Command, error) { return resourceread.New(ui), nil }},
 		entry{"resource delete", func(ui cli.Ui) (cli.Command, error) { return resourcedelete.New(ui), nil }},
 		entry{"resource apply", func(ui cli.Ui) (cli.Command, error) { return resourceapply.New(ui), nil }},
+		// will be refactored to resource apply
+		entry{"resource apply-grpc", func(ui cli.Ui) (cli.Command, error) { return resourceapplygrpc.New(ui), nil }},
+		entry{"resource read-grpc", func(ui cli.Ui) (cli.Command, error) { return resourcereadgrpc.New(ui), nil }},
+		entry{"resource list-grpc", func(ui cli.Ui) (cli.Command, error) { return resourcelistgrpc.New(ui), nil }},
+		entry{"resource delete-grpc", func(ui cli.Ui) (cli.Command, error) { return resourcedeletegrpc.New(ui), nil }},
 		entry{"resource list", func(ui cli.Ui) (cli.Command, error) { return resourcelist.New(ui), nil }},
 		entry{"rtt", func(ui cli.Ui) (cli.Command, error) { return rtt.New(ui), nil }},
 		entry{"services", func(cli.Ui) (cli.Command, error) { return services.New(), nil }},
 		entry{"services register", func(ui cli.Ui) (cli.Command, error) { return svcsregister.New(ui), nil }},
 		entry{"services deregister", func(ui cli.Ui) (cli.Command, error) { return svcsderegister.New(ui), nil }},
 		entry{"services export", func(ui cli.Ui) (cli.Command, error) { return svcsexport.New(ui), nil }},
+		entry{"services exported-services", func(ui cli.Ui) (cli.Command, error) { return exportedservices.New(ui), nil }},
 		entry{"snapshot", func(cli.Ui) (cli.Command, error) { return snapshot.New(), nil }},
+		entry{"snapshot decode", func(ui cli.Ui) (cli.Command, error) { return snapdecode.New(ui), nil }},
 		entry{"snapshot inspect", func(ui cli.Ui) (cli.Command, error) { return snapinspect.New(ui), nil }},
 		entry{"snapshot restore", func(ui cli.Ui) (cli.Command, error) { return snaprestore.New(ui), nil }},
 		entry{"snapshot save", func(ui cli.Ui) (cli.Command, error) { return snapsave.New(ui), nil }},
@@ -273,6 +289,7 @@ func RegisteredCommands(ui cli.Ui) map[string]mcli.CommandFactory {
 		entry{"troubleshoot", func(ui cli.Ui) (cli.Command, error) { return troubleshoot.New(), nil }},
 		entry{"troubleshoot proxy", func(ui cli.Ui) (cli.Command, error) { return troubleshootproxy.New(ui), nil }},
 		entry{"troubleshoot upstreams", func(ui cli.Ui) (cli.Command, error) { return troubleshootupstreams.New(ui), nil }},
+		entry{"troubleshoot ports", func(ui cli.Ui) (cli.Command, error) { return troubleshootports.New(ui), nil }},
 		entry{"validate", func(ui cli.Ui) (cli.Command, error) { return validate.New(ui), nil }},
 		entry{"version", func(ui cli.Ui) (cli.Command, error) { return version.New(ui), nil }},
 		entry{"watch", func(ui cli.Ui) (cli.Command, error) { return watch.New(ui, MakeShutdownCh()), nil }},

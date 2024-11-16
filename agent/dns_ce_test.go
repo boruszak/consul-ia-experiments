@@ -22,7 +22,7 @@ func TestDNS_CE_PeeredServices(t *testing.T) {
 		t.Skip("too slow for testing.Short")
 	}
 
-	a := StartTestAgent(t, TestAgent{HCL: ``, Overrides: `peering = { test_allow_peer_registrations = true }`})
+	a := StartTestAgent(t, TestAgent{HCL: ``, Overrides: `peering = { test_allow_peer_registrations = true } `})
 	defer a.Shutdown()
 	testrpc.WaitForTestAgent(t, a.RPC, "dc1")
 
@@ -128,4 +128,54 @@ func TestDNS_CE_PeeredServices(t *testing.T) {
 		require.Len(t, q.Extra, 0)
 		assertARec(t, q.Answer[0], "web-proxy.service.peer1.peer.consul.", "199.0.0.1")
 	})
+}
+
+func getTestCasesParseLocality() []testCaseParseLocality {
+	testCases := []testCaseParseLocality{
+		{
+			name:                "test [.<datacenter>.dc]",
+			labels:              []string{"test-dc", "dc"},
+			enterpriseDNSConfig: enterpriseDNSConfig{},
+			expectedResult: queryLocality{
+				EnterpriseMeta: acl.EnterpriseMeta{},
+				datacenter:     "test-dc",
+			},
+			expectedOK: true,
+		},
+		{
+			name:                "test [.<peer>.peer]",
+			labels:              []string{"test-peer", "peer"},
+			enterpriseDNSConfig: enterpriseDNSConfig{},
+			expectedResult: queryLocality{
+				EnterpriseMeta: acl.EnterpriseMeta{},
+				peer:           "test-peer",
+			},
+			expectedOK: true,
+		},
+		{
+			name:                "test 1 label",
+			labels:              []string{"test-peer"},
+			enterpriseDNSConfig: enterpriseDNSConfig{},
+			expectedResult: queryLocality{
+				EnterpriseMeta:   acl.EnterpriseMeta{},
+				peerOrDatacenter: "test-peer",
+			},
+			expectedOK: true,
+		},
+		{
+			name:                "test 0 labels",
+			labels:              []string{},
+			enterpriseDNSConfig: enterpriseDNSConfig{},
+			expectedResult:      queryLocality{},
+			expectedOK:          true,
+		},
+		{
+			name:                "test 3 labels returns not found",
+			labels:              []string{"test-dc", "dc", "test-blah"},
+			enterpriseDNSConfig: enterpriseDNSConfig{},
+			expectedResult:      queryLocality{},
+			expectedOK:          false,
+		},
+	}
+	return testCases
 }
