@@ -5,9 +5,10 @@
 
 package topology
 
+//TODO @sarah.alsmiller figure out if we can delete this
 const (
-    DefaultConsulImage           = "hashicorp/consul:1.16.2"
-    DefaultConsulEnterpriseImage = "hashicorp/consul-enterprise:1.16.2-ent"
-    DefaultEnvoyImage            = "envoyproxy/envoy:v1.26.4"
-    DefaultDataplaneImage        = "hashicorp/consul-dataplane:1.2.2"
+	DefaultConsulCEImage         = "hashicorp/consul:1.19.0"
+	DefaultConsulEnterpriseImage = "hashicorp/consul-enterprise:1.19.0-ent"
+	DefaultEnvoyImage            = "envoyproxy/envoy:v1.28.5"
+	DefaultDataplaneImage        = "hashicorp/consul-dataplane:1.5.0"
 )

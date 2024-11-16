@@ -10,6 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
+
+	retry "github.com/avast/retry-go"
+
+	"github.com/hashicorp/consul/api"
 )
 
 // PrintDetails will dump relevant addressing and naming data to the logger for
@@ -22,7 +27,19 @@ func (s *Sprawl) PrintDetails() error {
 	for _, cluster := range s.topology.Clusters {
 		client := s.clients[cluster.Name]
 
-		cfg, err := client.Operator().RaftGetConfiguration(nil)
+		var cfg *api.RaftConfiguration
+		var err error
+		err = retry.Do(
+			func() error {
+				cfg, err = client.Operator().RaftGetConfiguration(nil)
+				if err != nil {
+					return fmt.Errorf("error get raft config: %w", err)
+				}
+				return nil
+			},
+			retry.MaxDelay(5*time.Second),
+			retry.Attempts(15),
+		)
 		if err != nil {
 			return fmt.Errorf("could not get raft config for cluster %q: %w", cluster.Name, err)
 		}
@@ -59,29 +76,24 @@ func (s *Sprawl) PrintDetails() error {
 				})
 			}
 
-			for _, svc := range node.Services {
-				if svc.IsMeshGateway {
+			for _, wrk := range node.Workloads {
+				if wrk.IsMeshGateway {
 					cd.Apps = append(cd.Apps, appDetail{
 						Type:                  "mesh-gateway",
 						Container:             node.DockerName(),
-						ExposedPort:           node.ExposedPort(svc.Port),
-						ExposedEnvoyAdminPort: node.ExposedPort(svc.EnvoyAdminPort),
+						ExposedPort:           node.ExposedPort(wrk.Port),
+						ExposedEnvoyAdminPort: node.ExposedPort(wrk.EnvoyAdminPort),
 						Addresses:             addrs,
-						Service:               svc.ID.String(),
+						Service:               wrk.ID.String(),
 					})
 				} else {
-					ports := make(map[string]int)
-					for name, port := range svc.Ports {
-						ports[name] = node.ExposedPort(port.Number)
-					}
 					cd.Apps = append(cd.Apps, appDetail{
 						Type:                  "app",
 						Container:             node.DockerName(),
-						ExposedPort:           node.ExposedPort(svc.Port),
-						ExposedPorts:          ports,
-						ExposedEnvoyAdminPort: node.ExposedPort(svc.EnvoyAdminPort),
+						ExposedPort:           node.ExposedPort(wrk.Port),
+						ExposedEnvoyAdminPort: node.ExposedPort(wrk.EnvoyAdminPort),
 						Addresses:             addrs,
-						Service:               svc.ID.String(),
+						Service:               wrk.ID.String(),
 					})
 				}
 			}
@@ -126,17 +138,7 @@ func (s *Sprawl) PrintDetails() error {
 			if d.Type == "server" && d.Container == cluster.Leader {
 				d.Type = "leader"
 			}
-			var portStr string
-			if len(d.ExposedPorts) > 0 {
-				var out []string
-				for name, exposed := range d.ExposedPorts {
-					out = append(out, fmt.Sprintf("app:%s=%d", name, exposed))
-				}
-				sort.Strings(out)
-				portStr = strings.Join(out, " ")
-			} else {
-				portStr = "app=" + strconv.Itoa(d.ExposedPort)
-			}
+			portStr := "app=" + strconv.Itoa(d.ExposedPort)
 			if d.ExposedEnvoyAdminPort > 0 {
 				portStr += " envoy=" + strconv.Itoa(d.ExposedEnvoyAdminPort)
 			}
@@ -175,9 +177,8 @@ type appDetail struct {
 	Type                  string // server|mesh-gateway|app
 	Container             string
 	Addresses             []string
-	ExposedPort           int            `json:",omitempty"`
-	ExposedPorts          map[string]int `json:",omitempty"`
-	ExposedEnvoyAdminPort int            `json:",omitempty"`
+	ExposedPort           int `json:",omitempty"`
+	ExposedEnvoyAdminPort int `json:",omitempty"`
 	// just services
 	Service string `json:",omitempty"`
 }

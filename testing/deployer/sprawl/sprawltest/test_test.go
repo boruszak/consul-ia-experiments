@@ -1,155 +1,20 @@
 // Copyright (c) HashiCorp, Inc.
 // SPDX-License-Identifier: BUSL-1.1
 
+//go:build integration
+
 package sprawltest_test
 
 import (
 	"strconv"
 	"testing"
 
-	"github.com/hashicorp/consul/api"
-	pbauth "github.com/hashicorp/consul/proto-public/pbauth/v2beta1"
-	pbcatalog "github.com/hashicorp/consul/proto-public/pbcatalog/v2beta1"
-	pbmesh "github.com/hashicorp/consul/proto-public/pbmesh/v2beta1"
-	"github.com/hashicorp/consul/proto-public/pbresource"
 	"github.com/stretchr/testify/require"
 
+	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/testing/deployer/sprawl/sprawltest"
 	"github.com/hashicorp/consul/testing/deployer/topology"
 )
-
-func TestSprawl_CatalogV2(t *testing.T) {
-	serversDC1 := newTopologyServerSet("dc1-server", 3, []string{"dc1", "wan"}, nil)
-
-	cfg := &topology.Config{
-		Images: topology.Images{
-			ConsulCE:         "hashicorppreview/consul:1.17-dev",
-			ConsulEnterprise: "hashicorppreview/consul-enterprise:1.17-dev",
-			Dataplane:        "hashicorppreview/consul-dataplane:1.3-dev",
-		},
-		Networks: []*topology.Network{
-			{Name: "dc1"},
-			{Name: "wan", Type: "wan"},
-		},
-		Clusters: []*topology.Cluster{
-			{
-				Enterprise: true,
-				Name:       "dc1",
-				Nodes: topology.MergeSlices(serversDC1, []*topology.Node{
-					{
-						Kind:    topology.NodeKindDataplane,
-						Version: topology.NodeVersionV2,
-						Name:    "dc1-client1",
-						Services: []*topology.Service{
-							{
-								ID:             topology.ServiceID{Name: "ping"},
-								Image:          "rboyer/pingpong:latest",
-								Port:           8080,
-								EnvoyAdminPort: 19000,
-								Command: []string{
-									"-bind", "0.0.0.0:8080",
-									"-dial", "127.0.0.1:9090",
-									"-pong-chaos",
-									"-dialfreq", "250ms",
-									"-name", "ping",
-								},
-								Upstreams: []*topology.Upstream{{
-									ID:        topology.ServiceID{Name: "pong"},
-									LocalPort: 9090,
-								}},
-							},
-						},
-					},
-					{
-						Kind:    topology.NodeKindDataplane,
-						Version: topology.NodeVersionV2,
-						Name:    "dc1-client2",
-						Services: []*topology.Service{
-							{
-								ID:             topology.ServiceID{Name: "pong"},
-								Image:          "rboyer/pingpong:latest",
-								Port:           8080,
-								EnvoyAdminPort: 19000,
-								Command: []string{
-									"-bind", "0.0.0.0:8080",
-									"-dial", "127.0.0.1:9090",
-									"-pong-chaos",
-									"-dialfreq", "250ms",
-									"-name", "pong",
-								},
-								Upstreams: []*topology.Upstream{{
-									ID:        topology.ServiceID{Name: "ping"},
-									LocalPort: 9090,
-								}},
-							},
-						},
-					},
-				}),
-				InitialResources: []*pbresource.Resource{
-					sprawltest.MustSetResourceData(t, &pbresource.Resource{
-						Id: &pbresource.ID{
-							Type: pbmesh.HTTPRouteType,
-							Name: "test-http-route",
-						},
-					}, &pbmesh.HTTPRoute{
-						ParentRefs: []*pbmesh.ParentReference{{
-							Ref: &pbresource.Reference{
-								Type: pbcatalog.ServiceType,
-								Name: "test",
-							},
-						}},
-					}),
-					sprawltest.MustSetResourceData(t, &pbresource.Resource{
-						Id: &pbresource.ID{
-							Type: pbauth.TrafficPermissionsType,
-							Name: "ping-perms",
-						},
-					}, &pbauth.TrafficPermissions{
-						Destination: &pbauth.Destination{
-							IdentityName: "ping",
-						},
-						Action: pbauth.Action_ACTION_ALLOW,
-						Permissions: []*pbauth.Permission{{
-							Sources: []*pbauth.Source{{
-								IdentityName: "pong",
-							}},
-						}},
-					}),
-					sprawltest.MustSetResourceData(t, &pbresource.Resource{
-						Id: &pbresource.ID{
-							Type: pbauth.TrafficPermissionsType,
-							Name: "pong-perms",
-						},
-					}, &pbauth.TrafficPermissions{
-						Destination: &pbauth.Destination{
-							IdentityName: "pong",
-						},
-						Action: pbauth.Action_ACTION_ALLOW,
-						Permissions: []*pbauth.Permission{{
-							Sources: []*pbauth.Source{{
-								IdentityName: "ping",
-							}},
-						}},
-					}),
-				},
-			},
-		},
-	}
-
-	sp := sprawltest.Launch(t, cfg)
-
-	for _, cluster := range sp.Topology().Clusters {
-		leader, err := sp.Leader(cluster.Name)
-		require.NoError(t, err)
-		t.Logf("%s: leader = %s", cluster.Name, leader.ID())
-
-		followers, err := sp.Followers(cluster.Name)
-		require.NoError(t, err)
-		for _, f := range followers {
-			t.Logf("%s: follower = %s", cluster.Name, f.ID())
-		}
-	}
-}
 
 func TestSprawl(t *testing.T) {
 	serversDC1 := newTopologyServerSet("dc1-server", 3, []string{"dc1", "wan"}, nil)
@@ -157,10 +22,11 @@ func TestSprawl(t *testing.T) {
 
 	cfg := &topology.Config{
 		Images: topology.Images{
+			// TODO NOT HARDCODE
 			// ConsulEnterprise: "consul-dev:latest",
-			ConsulCE:         "hashicorppreview/consul:1.17-dev",
-			ConsulEnterprise: "hashicorppreview/consul-enterprise:1.17-dev",
-			Dataplane:        "hashicorppreview/consul-dataplane:1.3-dev",
+			ConsulCE:         "hashicorppreview/consul:1.20-dev",
+			ConsulEnterprise: "hashicorppreview/consul-enterprise:1.20-dev",
+			Dataplane:        "hashicorppreview/consul-dataplane:1.6-dev",
 		},
 		Networks: []*topology.Network{
 			{Name: "dc1"},
@@ -174,9 +40,9 @@ func TestSprawl(t *testing.T) {
 					{
 						Kind: topology.NodeKindClient,
 						Name: "dc1-client1",
-						Services: []*topology.Service{
+						Workloads: []*topology.Workload{
 							{
-								ID:             topology.ServiceID{Name: "mesh-gateway"},
+								ID:             topology.ID{Name: "mesh-gateway"},
 								Port:           8443,
 								EnvoyAdminPort: 19000,
 								IsMeshGateway:  true,
@@ -186,9 +52,9 @@ func TestSprawl(t *testing.T) {
 					{
 						Kind: topology.NodeKindClient,
 						Name: "dc1-client2",
-						Services: []*topology.Service{
+						Workloads: []*topology.Workload{
 							{
-								ID:             topology.ServiceID{Name: "ping"},
+								ID:             topology.ID{Name: "ping"},
 								Image:          "rboyer/pingpong:latest",
 								Port:           8080,
 								EnvoyAdminPort: 19000,
@@ -200,7 +66,7 @@ func TestSprawl(t *testing.T) {
 									"-name", "ping",
 								},
 								Upstreams: []*topology.Upstream{{
-									ID:        topology.ServiceID{Name: "pong"},
+									ID:        topology.ID{Name: "pong"},
 									LocalPort: 9090,
 									Peer:      "peer-dc2-default",
 								}},
@@ -226,9 +92,9 @@ func TestSprawl(t *testing.T) {
 					{
 						Kind: topology.NodeKindClient,
 						Name: "dc2-client1",
-						Services: []*topology.Service{
+						Workloads: []*topology.Workload{
 							{
-								ID:             topology.ServiceID{Name: "mesh-gateway"},
+								ID:             topology.ID{Name: "mesh-gateway"},
 								Port:           8443,
 								EnvoyAdminPort: 19000,
 								IsMeshGateway:  true,
@@ -238,9 +104,9 @@ func TestSprawl(t *testing.T) {
 					{
 						Kind: topology.NodeKindDataplane,
 						Name: "dc2-client2",
-						Services: []*topology.Service{
+						Workloads: []*topology.Workload{
 							{
-								ID:             topology.ServiceID{Name: "pong"},
+								ID:             topology.ID{Name: "pong"},
 								Image:          "rboyer/pingpong:latest",
 								Port:           8080,
 								EnvoyAdminPort: 19000,
@@ -252,32 +118,7 @@ func TestSprawl(t *testing.T) {
 									"-name", "pong",
 								},
 								Upstreams: []*topology.Upstream{{
-									ID:        topology.ServiceID{Name: "ping"},
-									LocalPort: 9090,
-									Peer:      "peer-dc1-default",
-								}},
-							},
-						},
-					},
-					{
-						Kind:    topology.NodeKindDataplane,
-						Version: topology.NodeVersionV2,
-						Name:    "dc2-client3",
-						Services: []*topology.Service{
-							{
-								ID:             topology.ServiceID{Name: "pong"},
-								Image:          "rboyer/pingpong:latest",
-								Port:           8080,
-								EnvoyAdminPort: 19000,
-								Command: []string{
-									"-bind", "0.0.0.0:8080",
-									"-dial", "127.0.0.1:9090",
-									"-pong-chaos",
-									"-dialfreq", "250ms",
-									"-name", "pong",
-								},
-								Upstreams: []*topology.Upstream{{
-									ID:        topology.ServiceID{Name: "ping"},
+									ID:        topology.ID{Name: "ping"},
 									LocalPort: 9090,
 									Peer:      "peer-dc1-default",
 								}},

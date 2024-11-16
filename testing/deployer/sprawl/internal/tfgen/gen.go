@@ -251,7 +251,7 @@ func (g *Generator) Generate(step Step) error {
 		addVolume(c.TLSVolumeName)
 	}
 
-	addImage("pause", "registry.k8s.io/pause:3.3")
+	addImage("pause", "docker.mirror.hashicorp.services/hashiderek/pause")
 
 	if step.StartServers() {
 		for _, c := range g.topology.SortedClusters() {
@@ -262,14 +262,13 @@ func (g *Generator) Generate(step Step) error {
 				addImage("", node.Images.Consul)
 				addImage("", node.Images.EnvoyConsulImage())
 				addImage("", node.Images.LocalDataplaneImage())
-				addImage("", node.Images.LocalDataplaneTProxyImage())
 
 				if node.IsAgent() {
 					addVolume(node.DockerName())
 				}
 
-				for _, svc := range node.Services {
-					addImage("", svc.Image)
+				for _, wrk := range node.Workloads {
+					addImage("", wrk.Image)
 				}
 
 				myContainers, err := g.generateNodeContainers(step, c, node)

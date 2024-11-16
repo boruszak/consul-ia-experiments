@@ -212,4 +212,54 @@ module.exports = [
     destination: '/consul/docs/v1.8.x/agent/config-entries/:slug',
     permanent: true,
   },
+  {
+    source: '/consul/docs/architecture/catalog/v1/:slug',
+    destination: '/consul/docs/architecture/catalog/:slug',
+    permanent: true,
+  },
+  {
+    source: '/consul/docs/:version(v1\.(?:8|9|10|11|12|13|14|15|16|17)\.x)/architecture/catalog/:slug*',
+    destination: '/consul/docs/:version/architecture/catalog/v1/:slug',
+    permanent: true,
+  },
+  {
+    source: '/consul/docs/nia/network-drivers/terraform-cloud',
+    destination: '/consul/docs/nia/network-drivers/hcp-terraform',
+    permanent: true,
+  },
+  {
+    source: '/consul/docs/:version(v1\.(?:8|9|10|11|12|13|14|15|16|17)\.x)/nia/network-drivers/hcp-terraform',
+    destination: '/consul/docs/:version/nia/network-drivers/terraform-cloud',
+    permanent: true,
+  },
+  {
+    source: '/consul/docs/k8s/multiport/:slug',
+    destination: '/consul/docs/architecture/catalog#v2-catalog',
+    permanent: true,
+  },
+  {
+    source: '/consul/docs/architecture/v2/:slug*',
+    destination: '/consul/docs/architecture/catalog#v2-catalog',
+    permanent: true,
+  },
+  {
+    source: '/consul/commands/resource/:slug',
+    destination: '/consul/docs/architecture/catalog#v2-catalog',
+    permanent: true,
+  },
+  {
+    source: '/consul/docs/k8s/dns',
+    destination: '/consul/docs/k8s/dns/enable',
+    permanent: true,
+  },
+  {
+    source: '/consul/docs/:version(v1\.(?:11|12|13|14|15|16|17|18)\.x)/k8s/dns/enable',
+    destination: '/consul/docs/:version/k8s/dns',
+    permanent: true,
+  },
+  {
+    source: '/consul/api-docs/hcp-link',
+    destination: '/hcp/docs/consul/concepts/consul-central',
+    permanent: true,
+  },
 ]

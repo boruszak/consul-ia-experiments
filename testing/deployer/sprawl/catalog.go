@@ -9,18 +9,16 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hashicorp/consul/api"
-	pbauth "github.com/hashicorp/consul/proto-public/pbauth/v2beta1"
-	pbcatalog "github.com/hashicorp/consul/proto-public/pbcatalog/v2beta1"
-	pbmesh "github.com/hashicorp/consul/proto-public/pbmesh/v2beta1"
-	"github.com/hashicorp/consul/proto-public/pbresource"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/hashicorp/consul/api"
+	"github.com/hashicorp/consul/proto-public/pbresource"
 	"github.com/hashicorp/consul/testing/deployer/topology"
 	"github.com/hashicorp/consul/testing/deployer/util"
 )
 
+// registerAllServicesToAgents registers services in agent-ful mode
 func (s *Sprawl) registerAllServicesToAgents() error {
 	for _, cluster := range s.topology.Clusters {
 		if err := s.registerServicesToAgents(cluster); err != nil {
@@ -30,10 +28,10 @@ func (s *Sprawl) registerAllServicesToAgents() error {
 	return nil
 }
 
-func (s *Sprawl) registerAllServicesForDataplaneInstances() error {
+func (s *Sprawl) syncAllServicesForDataplaneInstances() error {
 	for _, cluster := range s.topology.Clusters {
-		if err := s.registerServicesForDataplaneInstances(cluster); err != nil {
-			return fmt.Errorf("registerServicesForDataplaneInstances[%s]: %w", cluster.Name, err)
+		if err := s.syncWorkloadsForDataplaneInstances(cluster); err != nil {
+			return fmt.Errorf("syncWorkloadsForDataplaneInstances[%s]: %w", cluster.Name, err)
 		}
 	}
 	return nil
@@ -41,15 +39,12 @@ func (s *Sprawl) registerAllServicesForDataplaneInstances() error {
 
 func (s *Sprawl) registerServicesToAgents(cluster *topology.Cluster) error {
 	for _, node := range cluster.Nodes {
-		if !node.RunsWorkloads() || len(node.Services) == 0 || node.Disabled {
+		if !node.RunsWorkloads() || len(node.Workloads) == 0 || node.Disabled {
 			continue
 		}
 
 		if !node.IsAgent() {
 			continue
-		}
-		if node.IsV2() {
-			panic("don't call this")
 		}
 
 		agentClient, err := util.ProxyAPIClient(
@@ -62,8 +57,8 @@ func (s *Sprawl) registerServicesToAgents(cluster *topology.Cluster) error {
 			return err
 		}
 
-		for _, svc := range node.Services {
-			if err := s.registerAgentService(agentClient, cluster, node, svc); err != nil {
+		for _, wrk := range node.Workloads {
+			if err := s.registerAgentService(agentClient, cluster, node, wrk); err != nil {
 				return err
 			}
 		}
@@ -76,17 +71,14 @@ func (s *Sprawl) registerAgentService(
 	agentClient *api.Client,
 	cluster *topology.Cluster,
 	node *topology.Node,
-	svc *topology.Service,
+	wrk *topology.Workload,
 ) error {
 	if !node.IsAgent() {
 		panic("called wrong method type")
 	}
-	if node.IsV2() {
-		panic("don't call this")
-	}
 
-	if svc.IsMeshGateway {
-		return nil // handled at startup time for agent-full, but won't be for agent-less
+	if wrk.IsMeshGateway {
+		return nil // handled at startup time for agent-ful, but won't be for agent-less
 	}
 
 	var (
@@ -94,31 +86,31 @@ func (s *Sprawl) registerAgentService(
 	)
 
 	reg := &api.AgentServiceRegistration{
-		ID:   svc.ID.Name,
-		Name: svc.ID.Name,
-		Port: svc.Port,
-		Meta: svc.Meta,
+		ID:   wrk.ID.Name,
+		Name: wrk.ID.Name,
+		Port: wrk.Port,
+		Meta: wrk.Meta,
 	}
 	if cluster.Enterprise {
-		reg.Namespace = svc.ID.Namespace
-		reg.Partition = svc.ID.Partition
+		reg.Namespace = wrk.ID.Namespace
+		reg.Partition = wrk.ID.Partition
 	}
 
-	if !svc.DisableServiceMesh {
+	if !wrk.DisableServiceMesh {
 		var upstreams []api.Upstream
-		for _, u := range svc.Upstreams {
+		for _, us := range wrk.Upstreams {
 			uAPI := api.Upstream{
-				DestinationPeer:  u.Peer,
-				DestinationName:  u.ID.Name,
-				LocalBindAddress: u.LocalAddress,
-				LocalBindPort:    u.LocalPort,
+				DestinationPeer:  us.Peer,
+				DestinationName:  us.ID.Name,
+				LocalBindAddress: us.LocalAddress,
+				LocalBindPort:    us.LocalPort,
 				// Config               map[string]interface{} `json:",omitempty" bexpr:"-"`
 				// MeshGateway          MeshGatewayConfig      `json:",omitempty"`
 			}
 			if cluster.Enterprise {
-				uAPI.DestinationNamespace = u.ID.Namespace
-				if u.Peer == "" {
-					uAPI.DestinationPartition = u.ID.Partition
+				uAPI.DestinationNamespace = us.ID.Namespace
+				if us.Peer == "" {
+					uAPI.DestinationPartition = us.ID.Partition
 				}
 			}
 			upstreams = append(upstreams, uAPI)
@@ -133,18 +125,18 @@ func (s *Sprawl) registerAgentService(
 	}
 
 	switch {
-	case svc.CheckTCP != "":
+	case wrk.CheckTCP != "":
 		chk := &api.AgentServiceCheck{
 			Name:     "up",
-			TCP:      svc.CheckTCP,
+			TCP:      wrk.CheckTCP,
 			Interval: "5s",
 			Timeout:  "1s",
 		}
 		reg.Checks = append(reg.Checks, chk)
-	case svc.CheckHTTP != "":
+	case wrk.CheckHTTP != "":
 		chk := &api.AgentServiceCheck{
 			Name:     "up",
-			HTTP:     svc.CheckHTTP,
+			HTTP:     wrk.CheckHTTP,
 			Method:   "GET",
 			Interval: "5s",
 			Timeout:  "1s",
@@ -154,7 +146,7 @@ func (s *Sprawl) registerAgentService(
 
 	// Switch token for every request.
 	hdr := make(http.Header)
-	hdr.Set("X-Consul-Token", s.secrets.ReadServiceToken(cluster.Name, svc.ID))
+	hdr.Set("X-Consul-Token", s.secrets.ReadWorkloadToken(cluster.Name, wrk.ID))
 	agentClient.SetHeaders(hdr)
 
 RETRY:
@@ -163,24 +155,51 @@ RETRY:
 			time.Sleep(50 * time.Millisecond)
 			goto RETRY
 		}
-		return fmt.Errorf("failed to register service %q to node %q: %w", svc.ID, node.ID(), err)
+		return fmt.Errorf("failed to register workload %q to node %q: %w", wrk.ID, node.ID(), err)
 	}
 
-	logger.Debug("registered service to client agent",
-		"service", svc.ID.Name,
+	logger.Debug("registered workload to client agent",
+		"workload", wrk.ID.Name,
 		"node", node.Name,
-		"namespace", svc.ID.Namespace,
-		"partition", svc.ID.Partition,
+		"namespace", wrk.ID.Namespace,
+		"partition", wrk.ID.Partition,
 	)
 
 	return nil
 }
 
-func (s *Sprawl) registerServicesForDataplaneInstances(cluster *topology.Cluster) error {
-	identityInfo := make(map[topology.ServiceID]*Resource[*pbauth.WorkloadIdentity])
+// syncWorkloadsForDataplaneInstances register/deregister services in the given cluster
+func (s *Sprawl) syncWorkloadsForDataplaneInstances(cluster *topology.Cluster) error {
+	// registerWorkloadToNode is called when node is not disabled
+	registerWorkloadToNode := func(node *topology.Node, wrk *topology.Workload) error {
+		if err := s.registerCatalogServiceV1(cluster, node, wrk); err != nil {
+			return fmt.Errorf("error registering service: %w", err)
+		}
+		if !wrk.DisableServiceMesh {
+			if err := s.registerCatalogSidecarServiceV1(cluster, node, wrk); err != nil {
+				return fmt.Errorf("error registering sidecar service: %w", err)
+			}
+		}
+		return nil
+	}
+
+	// deregisterWorkloadFromNode is called when node is disabled
+	deregisterWorkloadFromNode := func(node *topology.Node, wrk *topology.Workload) error {
+		if err := s.deregisterCatalogServiceV1(cluster, node, wrk); err != nil {
+			return fmt.Errorf("error deregistering service: %w", err)
+		}
+		if !wrk.DisableServiceMesh {
+			if err := s.deregisterCatalogSidecarServiceV1(cluster, node, wrk); err != nil {
+				return fmt.Errorf("error deregistering sidecar service: %w", err)
+			}
+		}
+		return nil
+	}
+
+	var syncWorkload func(node *topology.Node, wrk *topology.Workload) error
 
 	for _, node := range cluster.Nodes {
-		if !node.RunsWorkloads() || len(node.Services) == 0 || node.Disabled {
+		if !node.RunsWorkloads() || len(node.Workloads) == 0 {
 			continue
 		}
 
@@ -188,103 +207,29 @@ func (s *Sprawl) registerServicesForDataplaneInstances(cluster *topology.Cluster
 			continue
 		}
 
-		if err := s.registerCatalogNode(cluster, node); err != nil {
-			return fmt.Errorf("error registering virtual node: %w", err)
+		// Register virtual node service first if node is not disabled
+		if !node.Disabled {
+			if err := s.registerCatalogNode(cluster, node); err != nil {
+				return fmt.Errorf("error registering virtual node: %w", err)
+			}
 		}
 
-		for _, svc := range node.Services {
-			if node.IsV2() {
-				pending := serviceInstanceToResources(node, svc)
-
-				workloadID := topology.NewServiceID(svc.WorkloadIdentity, svc.ID.Namespace, svc.ID.Partition)
-				if _, ok := identityInfo[workloadID]; !ok {
-					identityInfo[workloadID] = pending.WorkloadIdentity
-				}
-
-				// Write workload
-				res, err := pending.Workload.Build()
-				if err != nil {
-					return fmt.Errorf("error serializing resource %s: %w", util.IDToString(pending.Workload.Resource.Id), err)
-				}
-				workload, err := s.writeResource(cluster, res)
-				if err != nil {
-					return err
-				}
-				// Write check linked to workload
-				for _, check := range pending.HealthStatuses {
-					check.Resource.Owner = workload.Id
-					res, err := check.Build()
-					if err != nil {
-						return fmt.Errorf("error serializing resource %s: %w", util.IDToString(check.Resource.Id), err)
-					}
-					if _, err := s.writeResource(cluster, res); err != nil {
-						return err
-					}
-				}
-				// maybe write destinations
-				if pending.Destinations != nil {
-					res, err := pending.Destinations.Build()
-					if err != nil {
-						return fmt.Errorf("error serializing resource %s: %w", util.IDToString(pending.Destinations.Resource.Id), err)
-					}
-					if _, err := s.writeResource(cluster, res); err != nil {
-						return err
-					}
-				}
-				if pending.ProxyConfiguration != nil {
-					res, err := pending.ProxyConfiguration.Build()
-					if err != nil {
-						return fmt.Errorf("error serializing resource %s: %w", util.IDToString(pending.ProxyConfiguration.Resource.Id), err)
-					}
-					if _, err := s.writeResource(cluster, res); err != nil {
-						return err
-					}
-				}
+		// Register/deregister services on the node
+		for _, wrk := range node.Workloads {
+			if !node.Disabled {
+				syncWorkload = registerWorkloadToNode
 			} else {
-				if err := s.registerCatalogServiceV1(cluster, node, svc); err != nil {
-					return fmt.Errorf("error registering service: %w", err)
-				}
-				if !svc.DisableServiceMesh {
-					if err := s.registerCatalogSidecarServiceV1(cluster, node, svc); err != nil {
-						return fmt.Errorf("error registering sidecar service: %w", err)
-					}
-				}
+				syncWorkload = deregisterWorkloadFromNode
 			}
-		}
-	}
-
-	for _, identity := range identityInfo {
-		res, err := identity.Build()
-		if err != nil {
-			return fmt.Errorf("error serializing resource %s: %w", util.IDToString(identity.Resource.Id), err)
-		}
-		if _, err := s.writeResource(cluster, res); err != nil {
-			return err
-		}
-	}
-
-	if cluster.EnableV2 {
-		for id, svcData := range cluster.Services {
-			svcInfo := &Resource[*pbcatalog.Service]{
-				Resource: &pbresource.Resource{
-					Id: &pbresource.ID{
-						Type: pbcatalog.ServiceType,
-						Name: id.Name,
-						Tenancy: &pbresource.Tenancy{
-							Partition: id.Partition,
-							Namespace: id.Namespace,
-						},
-					},
-				},
-				Data: svcData,
-			}
-
-			res, err := svcInfo.Build()
-			if err != nil {
-				return fmt.Errorf("error serializing resource %s: %w", util.IDToString(svcInfo.Resource.Id), err)
-			}
-			if _, err := s.writeResource(cluster, res); err != nil {
+			if err := syncWorkload(node, wrk); err != nil {
 				return err
+			}
+		}
+
+		// Deregister the virtual node if node is disabled
+		if node.Disabled {
+			if err := s.deregisterCatalogNode(cluster, node); err != nil {
+				return fmt.Errorf("error deregistering virtual node: %w", err)
 			}
 		}
 	}
@@ -296,57 +241,14 @@ func (s *Sprawl) registerCatalogNode(
 	cluster *topology.Cluster,
 	node *topology.Node,
 ) error {
-	if node.IsV2() {
-
-		// TODO(rb): nodes are optional in v2 and won't be used in k8s by
-		// default. There are some scoping issues with the Node Type in 1.17 so
-		// disable it for now.
-		//
-		// To re-enable you also need to link it to the Workload by setting the
-		// NodeName field.
-		//
-		// return s.registerCatalogNodeV2(cluster, node)
-		return nil
-	}
 	return s.registerCatalogNodeV1(cluster, node)
 }
 
-func (s *Sprawl) registerCatalogNodeV2(
+func (s *Sprawl) deregisterCatalogNode(
 	cluster *topology.Cluster,
 	node *topology.Node,
 ) error {
-	if !node.IsDataplane() {
-		panic("called wrong method type")
-	}
-
-	nodeRes := &Resource[*pbcatalog.Node]{
-		Resource: &pbresource.Resource{
-			Id: &pbresource.ID{
-				Type: pbcatalog.NodeType,
-				Name: node.PodName(),
-				Tenancy: &pbresource.Tenancy{
-					Partition: node.Partition,
-					Namespace: "default", // temporary requirement
-				},
-			},
-			Metadata: map[string]string{
-				"dataplane-faux": "1",
-			},
-		},
-		Data: &pbcatalog.Node{
-			Addresses: []*pbcatalog.NodeAddress{
-				{Host: node.LocalAddress()},
-			},
-		},
-	}
-
-	res, err := nodeRes.Build()
-	if err != nil {
-		return err
-	}
-
-	_, err = s.writeResource(cluster, res)
-	return err
+	return s.deregisterCatalogNodeV1(cluster, node)
 }
 
 func (s *Sprawl) writeResource(cluster *topology.Cluster, res *pbresource.Resource) (*pbresource.Resource, error) {
@@ -413,16 +315,12 @@ RETRY:
 	return nil
 }
 
-func (s *Sprawl) registerCatalogServiceV1(
+func (s *Sprawl) deregisterCatalogNodeV1(
 	cluster *topology.Cluster,
 	node *topology.Node,
-	svc *topology.Service,
 ) error {
 	if !node.IsDataplane() {
 		panic("called wrong method type")
-	}
-	if node.IsV2() {
-		panic("don't call this")
 	}
 
 	var (
@@ -430,7 +328,81 @@ func (s *Sprawl) registerCatalogServiceV1(
 		logger = s.logger.With("cluster", cluster.Name)
 	)
 
-	reg := serviceToCatalogRegistration(cluster, node, svc)
+	dereg := &api.CatalogDeregistration{
+		Node:    node.PodName(),
+		Address: node.LocalAddress(),
+	}
+	if cluster.Enterprise {
+		dereg.Partition = node.Partition
+	}
+
+	// deregister synthetic node
+RETRY:
+	if _, err := client.Catalog().Deregister(dereg, nil); err != nil {
+		if isACLNotFound(err) {
+			time.Sleep(50 * time.Millisecond)
+			goto RETRY
+		}
+		return fmt.Errorf("error deregistering virtual node %s: %w", node.ID(), err)
+	}
+
+	logger.Info("virtual node removed",
+		"node", node.ID(),
+	)
+
+	return nil
+}
+
+func (s *Sprawl) deregisterCatalogServiceV1(
+	cluster *topology.Cluster,
+	node *topology.Node,
+	wrk *topology.Workload,
+) error {
+	if !node.IsDataplane() {
+		panic("called wrong method type")
+	}
+
+	var (
+		client = s.clients[cluster.Name]
+		logger = s.logger.With("cluster", cluster.Name)
+	)
+
+	dereg := &api.CatalogDeregistration{
+		Node:      node.PodName(),
+		ServiceID: wrk.ID.Name,
+	}
+RETRY:
+	if _, err := client.Catalog().Deregister(dereg, nil); err != nil {
+		if isACLNotFound(err) {
+			time.Sleep(50 * time.Millisecond)
+			goto RETRY
+		}
+		return fmt.Errorf("error deregistering service %s at node %s: %w", wrk.ID, node.ID(), err)
+	}
+
+	logger.Info("dataplane service removed",
+		"service", wrk.ID,
+		"node", node.ID(),
+	)
+
+	return nil
+}
+
+func (s *Sprawl) registerCatalogServiceV1(
+	cluster *topology.Cluster,
+	node *topology.Node,
+	wrk *topology.Workload,
+) error {
+	if !node.IsDataplane() {
+		panic("called wrong method type")
+	}
+
+	var (
+		client = s.clients[cluster.Name]
+		logger = s.logger.With("cluster", cluster.Name)
+	)
+
+	reg := workloadToCatalogRegistration(cluster, node, wrk)
 
 RETRY:
 	if _, err := client.Catalog().Register(reg, nil); err != nil {
@@ -438,11 +410,52 @@ RETRY:
 			time.Sleep(50 * time.Millisecond)
 			goto RETRY
 		}
-		return fmt.Errorf("error registering service %s to node %s: %w", svc.ID, node.ID(), err)
+		return fmt.Errorf("error registering service %s to node %s: %w", wrk.ID, node.ID(), err)
 	}
 
 	logger.Debug("dataplane service created",
-		"service", svc.ID,
+		"service", wrk.ID,
+		"node", node.ID(),
+	)
+
+	return nil
+}
+
+func (s *Sprawl) deregisterCatalogSidecarServiceV1(
+	cluster *topology.Cluster,
+	node *topology.Node,
+	wrk *topology.Workload,
+) error {
+	if !node.IsDataplane() {
+		panic("called wrong method type")
+	}
+	if wrk.DisableServiceMesh {
+		panic("not valid")
+	}
+
+	var (
+		client = s.clients[cluster.Name]
+		logger = s.logger.With("cluster", cluster.Name)
+	)
+
+	pid := wrk.ID
+	pid.Name += "-sidecar-proxy"
+	dereg := &api.CatalogDeregistration{
+		Node:      node.PodName(),
+		ServiceID: pid.Name,
+	}
+
+RETRY:
+	if _, err := client.Catalog().Deregister(dereg, nil); err != nil {
+		if isACLNotFound(err) {
+			time.Sleep(50 * time.Millisecond)
+			goto RETRY
+		}
+		return fmt.Errorf("error deregistering service %s to node %s: %w", wrk.ID, node.ID(), err)
+	}
+
+	logger.Info("dataplane sidecar service removed",
+		"service", pid,
 		"node", node.ID(),
 	)
 
@@ -452,16 +465,13 @@ RETRY:
 func (s *Sprawl) registerCatalogSidecarServiceV1(
 	cluster *topology.Cluster,
 	node *topology.Node,
-	svc *topology.Service,
+	wrk *topology.Workload,
 ) error {
 	if !node.IsDataplane() {
 		panic("called wrong method type")
 	}
-	if svc.DisableServiceMesh {
+	if wrk.DisableServiceMesh {
 		panic("not valid")
-	}
-	if node.IsV2() {
-		panic("don't call this")
 	}
 
 	var (
@@ -469,14 +479,14 @@ func (s *Sprawl) registerCatalogSidecarServiceV1(
 		logger = s.logger.With("cluster", cluster.Name)
 	)
 
-	pid, reg := serviceToSidecarCatalogRegistration(cluster, node, svc)
+	pid, reg := workloadToSidecarCatalogRegistration(cluster, node, wrk)
 RETRY:
 	if _, err := client.Catalog().Register(reg, nil); err != nil {
 		if isACLNotFound(err) {
 			time.Sleep(50 * time.Millisecond)
 			goto RETRY
 		}
-		return fmt.Errorf("error registering service %s to node %s: %w", svc.ID, node.ID(), err)
+		return fmt.Errorf("error registering service %s to node %s: %w", wrk.ID, node.ID(), err)
 	}
 
 	logger.Debug("dataplane sidecar service created",
@@ -501,186 +511,24 @@ func (r *Resource[V]) Build() (*pbresource.Resource, error) {
 	return r.Resource, nil
 }
 
-type ServiceResources struct {
-	Workload           *Resource[*pbcatalog.Workload]
-	HealthStatuses     []*Resource[*pbcatalog.HealthStatus]
-	Destinations       *Resource[*pbmesh.Destinations]
-	WorkloadIdentity   *Resource[*pbauth.WorkloadIdentity]
-	ProxyConfiguration *Resource[*pbmesh.ProxyConfiguration]
-}
-
-func serviceInstanceToResources(
-	node *topology.Node,
-	svc *topology.Service,
-) *ServiceResources {
-	if svc.IsMeshGateway {
-		panic("v2 does not yet support mesh gateways")
-	}
-
-	tenancy := &pbresource.Tenancy{
-		Partition: svc.ID.Partition,
-		Namespace: svc.ID.Namespace,
-	}
-
-	var (
-		wlPorts = map[string]*pbcatalog.WorkloadPort{}
-	)
-	for name, port := range svc.Ports {
-		wlPorts[name] = &pbcatalog.WorkloadPort{
-			Port:     uint32(port.Number),
-			Protocol: port.ActualProtocol,
-		}
-	}
-
-	var (
-		selector = &pbcatalog.WorkloadSelector{
-			Names: []string{svc.Workload},
-		}
-
-		workloadRes = &Resource[*pbcatalog.Workload]{
-			Resource: &pbresource.Resource{
-				Id: &pbresource.ID{
-					Type:    pbcatalog.WorkloadType,
-					Name:    svc.Workload,
-					Tenancy: tenancy,
-				},
-				Metadata: svc.Meta,
-			},
-			Data: &pbcatalog.Workload{
-				// TODO(rb): disabling this until node scoping makes sense again
-				// NodeName: node.PodName(),
-				Identity: svc.ID.Name,
-				Ports:    wlPorts,
-				Addresses: []*pbcatalog.WorkloadAddress{
-					{Host: node.LocalAddress()},
-				},
-			},
-		}
-		workloadIdentityRes = &Resource[*pbauth.WorkloadIdentity]{
-			Resource: &pbresource.Resource{
-				Id: &pbresource.ID{
-					Type:    pbauth.WorkloadIdentityType,
-					Name:    svc.WorkloadIdentity,
-					Tenancy: tenancy,
-				},
-			},
-			Data: &pbauth.WorkloadIdentity{},
-		}
-
-		healthResList   []*Resource[*pbcatalog.HealthStatus]
-		destinationsRes *Resource[*pbmesh.Destinations]
-		proxyConfigRes  *Resource[*pbmesh.ProxyConfiguration]
-	)
-
-	if svc.HasCheck() {
-		// TODO: needs ownerId
-		checkRes := &Resource[*pbcatalog.HealthStatus]{
-			Resource: &pbresource.Resource{
-				Id: &pbresource.ID{
-					Type:    pbcatalog.HealthStatusType,
-					Name:    svc.Workload + "-check-0",
-					Tenancy: tenancy,
-				},
-			},
-			Data: &pbcatalog.HealthStatus{
-				Type:   "external-sync",
-				Status: pbcatalog.Health_HEALTH_PASSING,
-			},
-		}
-
-		healthResList = []*Resource[*pbcatalog.HealthStatus]{checkRes}
-	}
-
-	if node.HasPublicAddress() {
-		workloadRes.Data.Addresses = append(workloadRes.Data.Addresses,
-			&pbcatalog.WorkloadAddress{Host: node.PublicAddress(), External: true},
-		)
-	}
-
-	if !svc.DisableServiceMesh {
-		destinationsRes = &Resource[*pbmesh.Destinations]{
-			Resource: &pbresource.Resource{
-				Id: &pbresource.ID{
-					Type:    pbmesh.DestinationsType,
-					Name:    svc.Workload,
-					Tenancy: tenancy,
-				},
-			},
-			Data: &pbmesh.Destinations{
-				Workloads: selector,
-			},
-		}
-
-		for _, u := range svc.Upstreams {
-			dest := &pbmesh.Destination{
-				DestinationRef: &pbresource.Reference{
-					Type: pbcatalog.ServiceType,
-					Name: u.ID.Name,
-					Tenancy: &pbresource.Tenancy{
-						Partition: u.ID.Partition,
-						Namespace: u.ID.Namespace,
-					},
-				},
-				DestinationPort: u.PortName,
-				ListenAddr: &pbmesh.Destination_IpPort{
-					IpPort: &pbmesh.IPPortAddress{
-						Ip:   u.LocalAddress,
-						Port: uint32(u.LocalPort),
-					},
-				},
-			}
-			destinationsRes.Data.Destinations = append(destinationsRes.Data.Destinations, dest)
-		}
-
-		if svc.EnableTransparentProxy {
-			proxyConfigRes = &Resource[*pbmesh.ProxyConfiguration]{
-				Resource: &pbresource.Resource{
-					Id: &pbresource.ID{
-						Type:    pbmesh.ProxyConfigurationType,
-						Name:    svc.Workload,
-						Tenancy: tenancy,
-					},
-				},
-				Data: &pbmesh.ProxyConfiguration{
-					Workloads: selector,
-					DynamicConfig: &pbmesh.DynamicConfig{
-						Mode: pbmesh.ProxyMode_PROXY_MODE_TRANSPARENT,
-					},
-				},
-			}
-		}
-	}
-
-	return &ServiceResources{
-		Workload:           workloadRes,
-		HealthStatuses:     healthResList,
-		Destinations:       destinationsRes,
-		WorkloadIdentity:   workloadIdentityRes,
-		ProxyConfiguration: proxyConfigRes,
-	}
-}
-
-func serviceToCatalogRegistration(
+func workloadToCatalogRegistration(
 	cluster *topology.Cluster,
 	node *topology.Node,
-	svc *topology.Service,
+	wrk *topology.Workload,
 ) *api.CatalogRegistration {
-	if node.IsV2() {
-		panic("don't call this")
-	}
 	reg := &api.CatalogRegistration{
 		Node:           node.PodName(),
 		SkipNodeUpdate: true,
 		Service: &api.AgentService{
 			Kind:    api.ServiceKindTypical,
-			ID:      svc.ID.Name,
-			Service: svc.ID.Name,
-			Meta:    svc.Meta,
-			Port:    svc.Port,
+			ID:      wrk.ID.Name,
+			Service: wrk.ID.Name,
+			Meta:    wrk.Meta,
+			Port:    wrk.Port,
 			Address: node.LocalAddress(),
 		},
 	}
-	if svc.IsMeshGateway {
+	if wrk.IsMeshGateway {
 		reg.Service.Kind = api.ServiceKindMeshGateway
 		reg.Service.Proxy = &api.AgentServiceConnectProxyConfig{
 			Config: map[string]interface{}{
@@ -704,46 +552,46 @@ func serviceToCatalogRegistration(
 		reg.Service.TaggedAddresses = map[string]api.ServiceAddress{
 			"lan": {
 				Address: node.LocalAddress(),
-				Port:    svc.Port,
+				Port:    wrk.Port,
 			},
 			"lan_ipv4": {
 				Address: node.LocalAddress(),
-				Port:    svc.Port,
+				Port:    wrk.Port,
 			},
 			"wan": {
 				Address: node.PublicAddress(),
-				Port:    svc.Port,
+				Port:    wrk.Port,
 			},
 			"wan_ipv4": {
 				Address: node.PublicAddress(),
-				Port:    svc.Port,
+				Port:    wrk.Port,
 			},
 		}
 	}
 	if cluster.Enterprise {
-		reg.Partition = svc.ID.Partition
-		reg.Service.Namespace = svc.ID.Namespace
-		reg.Service.Partition = svc.ID.Partition
+		reg.Partition = wrk.ID.Partition
+		reg.Service.Namespace = wrk.ID.Namespace
+		reg.Service.Partition = wrk.ID.Partition
 	}
 
-	if svc.HasCheck() {
+	if wrk.HasCheck() {
 		chk := &api.HealthCheck{
 			Name: "external sync",
 			// Type:      "external-sync",
 			Status:      "passing", //  TODO
-			ServiceID:   svc.ID.Name,
-			ServiceName: svc.ID.Name,
+			ServiceID:   wrk.ID.Name,
+			ServiceName: wrk.ID.Name,
 			Output:      "",
 		}
 		if cluster.Enterprise {
-			chk.Namespace = svc.ID.Namespace
-			chk.Partition = svc.ID.Partition
+			chk.Namespace = wrk.ID.Namespace
+			chk.Partition = wrk.ID.Partition
 		}
 		switch {
-		case svc.CheckTCP != "":
-			chk.Definition.TCP = svc.CheckTCP
-		case svc.CheckHTTP != "":
-			chk.Definition.HTTP = svc.CheckHTTP
+		case wrk.CheckTCP != "":
+			chk.Definition.TCP = wrk.CheckTCP
+		case wrk.CheckHTTP != "":
+			chk.Definition.HTTP = wrk.CheckHTTP
 			chk.Definition.Method = "GET"
 		}
 		reg.Checks = append(reg.Checks, chk)
@@ -751,15 +599,12 @@ func serviceToCatalogRegistration(
 	return reg
 }
 
-func serviceToSidecarCatalogRegistration(
+func workloadToSidecarCatalogRegistration(
 	cluster *topology.Cluster,
 	node *topology.Node,
-	svc *topology.Service,
-) (topology.ServiceID, *api.CatalogRegistration) {
-	if node.IsV2() {
-		panic("don't call this")
-	}
-	pid := svc.ID
+	wrk *topology.Workload,
+) (topology.ID, *api.CatalogRegistration) {
+	pid := wrk.ID
 	pid.Name += "-sidecar-proxy"
 	reg := &api.CatalogRegistration{
 		Node:           node.PodName(),
@@ -768,13 +613,13 @@ func serviceToSidecarCatalogRegistration(
 			Kind:    api.ServiceKindConnectProxy,
 			ID:      pid.Name,
 			Service: pid.Name,
-			Meta:    svc.Meta,
-			Port:    svc.EnvoyPublicListenerPort,
+			Meta:    wrk.Meta,
+			Port:    wrk.EnvoyPublicListenerPort,
 			Address: node.LocalAddress(),
 			Proxy: &api.AgentServiceConnectProxyConfig{
-				DestinationServiceName: svc.ID.Name,
-				DestinationServiceID:   svc.ID.Name,
-				LocalServicePort:       svc.Port,
+				DestinationServiceName: wrk.ID.Name,
+				DestinationServiceID:   wrk.ID.Name,
+				LocalServicePort:       wrk.Port,
 			},
 		},
 		Checks: []*api.HealthCheck{{
@@ -784,7 +629,7 @@ func serviceToSidecarCatalogRegistration(
 			ServiceID:   pid.Name,
 			ServiceName: pid.Name,
 			Definition: api.HealthCheckDefinition{
-				TCP: fmt.Sprintf("%s:%d", node.LocalAddress(), svc.EnvoyPublicListenerPort),
+				TCP: fmt.Sprintf("%s:%d", node.LocalAddress(), wrk.EnvoyPublicListenerPort),
 			},
 			Output: "",
 		}},
@@ -805,17 +650,17 @@ func serviceToSidecarCatalogRegistration(
 		reg.Checks[0].Partition = pid.Partition
 	}
 
-	for _, u := range svc.Upstreams {
+	for _, us := range wrk.Upstreams {
 		pu := api.Upstream{
-			DestinationName:  u.ID.Name,
-			DestinationPeer:  u.Peer,
-			LocalBindAddress: u.LocalAddress,
-			LocalBindPort:    u.LocalPort,
+			DestinationName:  us.ID.Name,
+			DestinationPeer:  us.Peer,
+			LocalBindAddress: us.LocalAddress,
+			LocalBindPort:    us.LocalPort,
 		}
 		if cluster.Enterprise {
-			pu.DestinationNamespace = u.ID.Namespace
-			if u.Peer == "" {
-				pu.DestinationPartition = u.ID.Partition
+			pu.DestinationNamespace = us.ID.Namespace
+			if us.Peer == "" {
+				pu.DestinationPartition = us.ID.Partition
 			}
 		}
 		reg.Service.Proxy.Upstreams = append(reg.Service.Proxy.Upstreams, pu)

@@ -473,6 +473,10 @@
         "path": "peering/establish"
       },
       {
+        "title": "exported-services",
+        "path": "peering/exported-services"
+      },
+      {
         "title": "generate-token",
         "path": "peering/generate-token"
       },
@@ -512,6 +516,10 @@
       {
         "title": "export",
         "path": "services/export"
+      },
+      {
+        "title": "exported-services",
+        "path": "services/exported-services"
       }
     ]
   },
@@ -525,6 +533,10 @@
       {
         "title": "agent",
         "path": "snapshot/agent"
+      },
+      {
+        "title": "decode",
+        "path": "snapshot/decode"
       },
       {
         "title": "inspect",
@@ -571,6 +583,10 @@
       {
         "title": "proxy",
         "path": "troubleshoot/proxy"
+      },
+      {
+        "title": "ports",
+        "path": "troubleshoot/ports"
       }
     ]
   },

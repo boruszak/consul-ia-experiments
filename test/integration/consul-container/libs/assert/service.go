@@ -12,16 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/consul/api"
-	pbcatalog "github.com/hashicorp/consul/proto-public/pbcatalog/v2beta1"
-	"github.com/hashicorp/consul/proto-public/pbresource"
-	"github.com/hashicorp/consul/sdk/testutil"
-	"github.com/hashicorp/consul/sdk/testutil/retry"
-	"github.com/hashicorp/consul/testing/deployer/util"
-	"github.com/hashicorp/go-cleanhttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/hashicorp/go-cleanhttp"
+
+	"github.com/hashicorp/consul/api"
+	"github.com/hashicorp/consul/sdk/testutil/retry"
 	libservice "github.com/hashicorp/consul/test/integration/consul-container/libs/service"
 )
 
@@ -29,64 +26,6 @@ const (
 	defaultHTTPTimeout = 120 * time.Second
 	defaultHTTPWait    = defaultWait
 )
-
-// CatalogV2ServiceExists verifies the service name exists in the Consul catalog
-func CatalogV2ServiceExists(t *testing.T, client pbresource.ResourceServiceClient, svc string, tenancy *pbresource.Tenancy) {
-	t.Helper()
-	CatalogV2ServiceHasEndpointCount(t, client, svc, tenancy, -1)
-}
-
-// CatalogV2ServiceDoesNotExist verifies the service name does not exist in the Consul catalog
-func CatalogV2ServiceDoesNotExist(t *testing.T, client pbresource.ResourceServiceClient, svc string, tenancy *pbresource.Tenancy) {
-	t.Helper()
-	ctx := testutil.TestContext(t)
-	retry.Run(t, func(r *retry.R) {
-		got, err := util.GetDecodedResource[*pbcatalog.Service](ctx, client, &pbresource.ID{
-			Type:    pbcatalog.ServiceType,
-			Name:    svc,
-			Tenancy: tenancy,
-		})
-		require.NoError(r, err, "error reading service data")
-		require.Nil(r, got, "unexpectedly found Service resource for %q", svc)
-
-		got2, err := util.GetDecodedResource[*pbcatalog.ServiceEndpoints](ctx, client, &pbresource.ID{
-			Type:    pbcatalog.ServiceEndpointsType,
-			Name:    svc,
-			Tenancy: tenancy,
-		})
-		require.NotNil(r, err, "error reading service data")
-		require.Nil(r, got2, "unexpectedly found ServiceEndpoints resource for %q", svc)
-	})
-}
-
-// CatalogV2ServiceHasEndpointCount verifies the service name exists in the Consul catalog and has the specified
-// number of workload endpoints.
-func CatalogV2ServiceHasEndpointCount(t *testing.T, client pbresource.ResourceServiceClient, svc string, tenancy *pbresource.Tenancy, count int) {
-	t.Helper()
-
-	ctx := testutil.TestContext(t)
-	retry.Run(t, func(r *retry.R) {
-		got, err := util.GetDecodedResource[*pbcatalog.Service](ctx, client, &pbresource.ID{
-			Type:    pbcatalog.ServiceType,
-			Name:    svc,
-			Tenancy: tenancy,
-		})
-		require.NoError(r, err, "error reading service data")
-		require.NotNil(r, got, "did not find Service resource for %q", svc)
-
-		got2, err := util.GetDecodedResource[*pbcatalog.ServiceEndpoints](ctx, client, &pbresource.ID{
-			Type:    pbcatalog.ServiceEndpointsType,
-			Name:    svc,
-			Tenancy: tenancy,
-		})
-		require.NoError(r, err, "error reading service data")
-		require.NotNil(r, got2, "did not find ServiceEndpoints resource for %q", svc)
-		require.NotEmpty(r, got2.Data.Endpoints, "did not find any workload data in the ServiceEndpoints resource for %q", svc)
-		if count > 0 {
-			require.Len(r, got2.Data.Endpoints, count)
-		}
-	})
-}
 
 // CatalogServiceExists verifies the service name exists in the Consul catalog
 func CatalogServiceExists(t *testing.T, c *api.Client, svc string, opts *api.QueryOptions) {
@@ -221,7 +160,7 @@ func doHTTPServiceEchoesWithClient(
 	}
 
 	retry.RunWith(failer(), t, func(r *retry.R) {
-		t.Logf("making call to %s", url)
+		r.Logf("making call to %s", url)
 
 		reader := strings.NewReader(phrase)
 		req, err := http.NewRequest("POST", url, reader)
@@ -242,7 +181,7 @@ func doHTTPServiceEchoesWithClient(
 		defer res.Body.Close()
 
 		statusCode := res.StatusCode
-		t.Logf("...got response code %d", statusCode)
+		r.Logf("...got response code %d", statusCode)
 		require.Equal(r, 200, statusCode)
 
 		body, err := io.ReadAll(res.Body)
@@ -342,7 +281,7 @@ func WaitForFortioNameWithClient(t *testing.T, r retry.Retryer, urlbase string, 
 // It retries with timeout defaultHTTPTimeout and wait defaultHTTPWait.
 //
 // client must be a custom http.Client
-func FortioNameWithClient(t retry.Failer, urlbase string, name string, reqHost string, client *http.Client) (string, error) {
+func FortioNameWithClient(t retry.TestingTB, urlbase string, name string, reqHost string, client *http.Client) (string, error) {
 	t.Helper()
 	var fortioNameRE = regexp.MustCompile("\nFORTIO_NAME=(.+)\n")
 	var body []byte
