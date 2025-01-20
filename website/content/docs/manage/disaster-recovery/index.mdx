@@ -7,7 +7,7 @@ description: >-
 
 # Disaster recovery overview
 
-This topic provides an overview of the architectural considerations and recommendations for preparing a disaster recovery strategy for your Consul datacenter.
+This topic provides an overview of the architectural considerations and recommendations for preparing a disaster recovery strategy for your Consul cluster.
 
 ## Introduction
 
@@ -19,21 +19,21 @@ Disaster recovery considerations are an important part of a company’s overall 
 
 </Note>
 
-The recommended method of backing up Consul state is to use the built-in Consul [snapshot](/consul/commands/snapshot) command accessed via the API or CLI. This will ensure a consistent and atomic point-in-time capture of the Consul cluster state. The next tutorial, [Backup Consul Data and State](/consul/tutorials/production-deploy/backup-and-restore) covers this in more detail. 
+The recommended method of backing up Consul state is to use the built-in Consul [snapshot](/consul/commands/snapshot) command accessed via the API or CLI. This will ensure a consistent and atomic point-in-time capture of the Consul cluster state. The tutorial [Backup Consul Data and State](/consul/tutorials/production-deploy/backup-and-restore) covers this in further detail. 
 
 For Consul clusters deployed to HashiCorp Cloud Platform (HCP), the recommended method of backing up Consul's state is to use the **snapshots** functionality in the **related cluster section** in the HCP Consul Dedicated UI. Taking snapshots using the Consul agent or using the automated backups feature of Consul Enterprise agents is also possible.
 
-## Backup Storage
+## Backup Storage considerations
 
-- Although block or file-based disk backups (e.g. AWS Volume snapshots, Azure Backup) can be an effective way of backing up other services, they cannot reliably restore a Consul cluster to its original state. 
+Although block or file-based disk backups (e.g. AWS Volume snapshots, Azure Backup) can be an effective way of backing up other services, they cannot reliably restore a Consul cluster to its original state. 
 
-- Snapshots should be stored on mounted or external storage, instead of local or ephemeral storage.
+Snapshots should be stored on mounted or external storage, instead of local or ephemeral storage.
 
 ## Backup Management
 
-- Snapshots should be taken on a regular basis. They can be automated through the use of scripting, 3rd party tools, or the [automated backups](/consul/docs/manage/automated-backup) feature of Consul Enterprise. 
+Snapshots should be taken on a regular basis. They can be automated through the use of scripting, 3rd party tools, or the [automated backups](/consul/docs/manage/automated-backup) feature of Consul Enterprise. 
 
-- How frequently snapshots are taken should align with the RTO and RPO set forth within each customer’s disaster recovery policies. 
+How frequently snapshots are taken should align with the RTO and RPO set forth within each customer’s disaster recovery policies. 
 
 <Note>
 
@@ -41,40 +41,21 @@ For Consul clusters deployed to HashiCorp Cloud Platform (HCP), the recommended 
 
 </Note>
 
-- Retention policies should be configured on mounted or external storage to align with the customer’s data retention and compliance policies. 
+Retention policies should be configured on mounted or external storage to align with the customer’s data retention and compliance policies. 
 
-## Restore
+## Restoring backups
 
-- Customers should regularly test and validate the restore process for critical systems to ensure that everything works as expected. This is typically defined within a [Disaster Recovery Plan](#glossary) (DRP). 
+Customers should regularly test and validate the restore process for critical systems to ensure that everything works as expected. This is typically defined within a [Disaster Recovery Plan](#glossary) (DRP). 
 
-- In the event of a loss of quorum in the primary Consul cluster or a complete loss of the primary Consul cluster, to restore you will need to build a new Consul cluster from the latest snapshot. Consul client agents may also need to be re-installed/reconfigured. Automation technologies can greatly reduce the amount of time that it will take to perform these steps. Keep this in mind when considering RPO and RTO. 
+In the event of a loss of quorum in the primary Consul cluster or a complete loss of the primary Consul cluster, to restore you will need to build a new Consul cluster from the latest snapshot. Consul client agents may also need to be re-installed/reconfigured. Automation technologies can greatly reduce the amount of time that it will take to perform these steps. Keep this in mind when considering RPO and RTO. 
 
-- When you restore a snapshot to a new Consul cluster, Note the following behavior: 
+When you restore a snapshot to a new Consul cluster, note the following behavior: 
 
   - If [token persistence](/consul/docs/reference/agent/configuration-file) was enabled on client agents **prior** to performing a snapshot restore, then the client agents will continue to function after the restore.
 
   - If the ACL token is specified directly in the [client agent configuration](/consul/docs/reference/agent/configuration-file) **prior** to performing a snapshot restore, then the client agents will continue to function after the restore.
 
-  - If neither of the above options were configured **prior** to a snapshot restore, then client agents will not function after the restore as they will not have permissions to register with the new Consul cluster.
-
-    - This would be relevant if the ACL token was set via the API/CLI or if the ACL token was set via an environment variable.
-
-<Tabs>
-<Tab heading="API/CLI">
-
-```shell-session
-$ consul acl set-agent-token -token="<token_value>" agent "<token_value>"
-```
-
-</Tab>
-<Tab heading="Environment Variable">
-
-```shell-session
-CONSUL_HTTP_TOKEN=<your_token_here>
-```
-
-</Tab>
-</Tabs>        
+  - If neither of the above options were configured **prior** to a snapshot restore, then client agents will not function after the restore as they will not have permissions to register with the new Consul cluster. This would be relevant if the ACL token was set via the API/CLI or if the ACL token was set via an environment variable. To override an API/CLI token, use the [acl set-agent-token](/consul/commands/acl/set-agent-token#agent) command; and to override an environment variable token, set the `CONSUL_HTTP_TOKEN` variable.
 
 <br />
 
@@ -112,7 +93,7 @@ Once you establish and federate a primary Consul datacenter; you cannot migrate,
 
 This approach provides two distinct advantages.
 
-1. It becomes easier to move the primary Consul datacenter. For example, you may want to migrate it from an on premises datacenter to a cloud environment. Typically, this would entail performing a backup and restore of the primary Consul datacenter to the alternate location. Review the [Disaster Recovery for the Primary Datacenter](/consul/tutorials/datacenter-operations/recovery-outage-primary) tutorial for guidance on restoring a Consul cluster. 
+- It becomes easier to move the primary Consul datacenter. For example, you may want to migrate it from an on premises datacenter to a cloud environment. Typically, this would entail performing a backup and restore of the primary Consul datacenter to the alternate location. Review the [Disaster Recovery for the Primary Datacenter](/consul/tutorials/datacenter-operations/recovery-outage-primary) tutorial for guidance on restoring a Consul cluster. 
 - In the event of a disaster, the additional Consul datacenters can still continue to function independently of the primary Consul datacenter although functionality will be reduced until the primary Consul datacenter is brought back online. See the table below for more details. 
 
 ### Primary Consul datacenter outage behaviors
