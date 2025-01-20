@@ -9,11 +9,13 @@ description: >-
 
 This topic describes how to deploy a Consul datacenter to an Openshift Kubernetes cluster. After deploying Consul, you will interact with Consul using the CLI, UI, and/or API.
 
+## Introduction
+
 [Red Hat OpenShift](https://www.openshift.com/learn/what-is-openshift) is a distribution of the Kubernetes platform that provides a number of usability and security enhancements.
 
 <Warning title="Security Warning">
 
- This tutorial is not for production use. The chart was installed with an insecure configuration of Consul. Refer to the [Secure Consul and Registered Services on Kubernetes tutorial](/consul/tutorials/kubernetes/kubernetes-secure-agents) to learn how you can secure Consul on Kubernetes in production.
+ This end result of this tutorial is not for production use. The chart was installed with an insecure configuration of Consul which you still need to secure. Refer to the [Secure Consul and Registered Services on Kubernetes tutorial](/consul/tutorials/kubernetes/kubernetes-secure-agents) to learn how you can secure Consul on Kubernetes in production.
 
 </Warning>
 
@@ -190,11 +192,7 @@ In the Helm chart values file, use the output of previous command and update the
 
 ### Helm chart configuration
 
-To customize your deployment, you can pass a YAML configuration file to be used during the deployment.
-Any values specified in the values file will override the Helm chart's default settings.
-The following example file sets the `global.openshift.enabled` entry to true,
-which is required to operate Consul on OpenShift. Generate a
-file named `values.yaml` that you will reference in the `helm install` command later.
+To customize your deployment, you can pass a YAML configuration file to be used during the deployment. Any values specified in the values file will override the Helm chart's default settings. The following example file sets the `global.openshift.enabled` entry to true, which is required to operate Consul on OpenShift. Generate a file named `values.yaml` that you will reference in the `helm install` command later.
 
 <CodeBlockConfig filename="values.yaml">
 
@@ -352,17 +350,11 @@ https://www.consul.io/docs/reference/k8s/consul-k8s-cli
 
 Consul K8s CLI is a tool for quickly installing and interacting with Consul on Kubernetes. Ensure that you are installing the correct version of the CLI for your Consul on Kubernetes deployment, as the CLI and the control plane are version dependent.
 
-In order to install the latest version of the Consul K8s CLI depending on your operating system, follow the instructions [here](/consul/docs/k8s/installation/install-cli#install-the-cli).
+In order to install the latest version of the Consul K8s CLI depending on your operating system, follow the instructions [here](/consul/docs/k8s/installation/install-cli#install-the-cli). You can review the official [Consul K8S CLI documentation](/consul/docs/reference-cli/consul-k8s) to learn more about additional settings.
 
 ```shell-session
 $ consul-k8s install -config-file=values.yaml
 ```
-
-<Note>
-
- You can review the official [Consul K8S CLI documentation](/consul/docs/reference-cli/consul-k8s) to learn more about additional settings.
-
-</Note>
 
 When Consul is installed successfully, expect the following output:
 
@@ -732,12 +724,6 @@ Specifically, you:
 - Used the Consul CLI to inspect your environment
 - Decommissioned the environment
 
-It is highly recommended that you properly secure your Kubernetes cluster and
-that you understand and enable the recommended security features of Consul.
-Refer to the
-[Secure Consul and Registered Services on Kubernetes tutorial](/consul/tutorials/kubernetes/kubernetes-secure-agents)
-to learn how you can deploy an example workload, and secure Consul on Kubernetes
-for production.
+It is highly recommended that you properly secure your Kubernetes cluster and that you understand and enable the recommended security features of Consul. Refer to the [Secure Consul and Registered Services on Kubernetes tutorial](/consul/tutorials/kubernetes/kubernetes-secure-agents) to learn how you can deploy an example workload, and secure Consul on Kubernetes for production.
 
-For more information on the Consul Helm chart configuration options, review the
-[consul-helm chart documentation](/consul/docs/reference/k8s/helm).
+For more information on the Consul Helm chart configuration options, review the [consul-helm chart documentation](/consul/docs/reference/k8s/helm).
