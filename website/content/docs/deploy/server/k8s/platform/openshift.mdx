@@ -25,24 +25,24 @@ To deploy Consul on Openshift, you will need:
 
 - Access to a Kubernetes cluster deployed with OpenShift
 - A Red Hat account
-- [CodeReady Containers v1.17.0+](https://access.redhat.com/documentation/en-us/red_hat_codeready_containers/1.0/html/getting_started_guide/getting-started-with-codeready-containers_gsg)
-- [consul v1.14.0+](/consul/install/)
+- [Red Hat OpenShift Local 4.17](https://docs.redhat.com/en/documentation/openshift_container_platform/4.17)
+- [consul v1.18.6+](/consul/install/)
 - [Helm v3.6+](https://helm.sh/docs/helm/helm_install/)
-- [consul-k8s v1.0.2+](/consul/docs/reference-cli/consul-k8s#install-the-cli)
+- [consul-k8s v1.6.2+](/consul/docs/reference-cli/consul-k8s#install-the-cli)
 
 ---
 
 ## Deploy OpenShift
 
-You can deploy OpenShift on multiple [platforms](https://docs.openshift.com/container-platform/4.8/installing/index.html#supported-platforms-for-openshift-clusters_ocp-installation-overview), and there are several installation options available for installing OpenShift on either production and development environments. This guide requires a running OpenShift cluster to deploy Consul on Kubernetes. If an OpenShift cluster is already provisioned in a production or development environment to be used for deploying Consul on Kubernetes, skip ahead to [Deploy Consul](#deploy-consul).
+You can deploy OpenShift on multiple [platforms](https://docs.openshift.com/container-platform/4.17/architecture/architecture-installation.html#supported-platforms-for-openshift-clusters_architecture-installation), and there are several installation options available for installing OpenShift on either production and development environments. This guide requires a running OpenShift cluster to deploy Consul on Kubernetes. If an OpenShift cluster is already provisioned in a production or development environment to be used for deploying Consul on Kubernetes, skip ahead to [Deploy Consul](#deploy-consul).
 
-This tutorial will use CodeReady Containers (CRC) to provide a pre-configured development OpenShift environment on your local machine. CRC is bundled as a Red Hat Enterprise Linux virtual machine that supports native hypervisors for Linux, macOS, and Windows 10. CRC is the quickest way to get started building OpenShift clusters. It is designed to run on a local computer to simplify setup and emulate the cloud development environment locally with all the tools needed to develop container-based apps. While we use CRC in this tutorial, the Consul Helm deployment process will work on any OpenShift cluster and is production ready.
+This tutorial will use OpenShift Local to provide a pre-configured development OpenShift environment on your local machine. OpenShift Local is bundled as a Red Hat Enterprise Linux virtual machine that supports native hypervisors for Linux, macOS, and Windows 10. OpenShift Local is the quickest way to get started building OpenShift clusters. It is designed to run on a local computer to simplify setup and emulate the cloud development environment locally with all the tools needed to develop container-based apps. While we use OpenShift Local in this tutorial, the Consul Helm deployment process will work on any OpenShift cluster and is production ready.
 
-If deploying CRC is not preferred, a managed OpenShift cluster could quickly be provisioned within less than an hour using [Azure RedHat OpenShift](https://docs.microsoft.com/en-us/azure/openshift/tutorial-create-cluster). [Azure RedHat Openshift](https://docs.microsoft.com/en-us/azure/openshift/intro-openshift) requires an Azure subscription. However, it provides the simplest installation flow for getting a production-ready OpenShift cluster available to be used for this tutorial. 
+If locally deploying OpenShift is not preferred, a managed OpenShift cluster could quickly be provisioned within less than an hour using [Azure RedHat OpenShift](https://docs.microsoft.com/en-us/azure/openshift/tutorial-create-cluster). [Azure RedHat Openshift](https://docs.microsoft.com/en-us/azure/openshift/intro-openshift) requires an Azure subscription. However, it provides the simplest installation flow for getting a production-ready OpenShift cluster available to be used for this tutorial. 
 
-### CRC Setup
+### OpenShift Local Setup
 
-After installing CodeReady Containers, issue the following command to setup your environment.
+After installing OpenShift Local, issue the following command to setup your environment.
 
 ```shell-session
 $ crc setup
@@ -64,9 +64,9 @@ INFO Adding crc daemon plist file and loading it
 Your system is correctly setup for using CRC. Use 'crc start' to start the instance
 ```
 
-### CRC start
+### OpenShift Local start
 
-Once the setup is complete, you can start the CRC service with the following command. The command will perform a few system checks to ensure your system meets the minimum requirements and will then ask you to provide an image pull secret. You should have your [Red Hat account](https://cloud.redhat.com/openshift/install/crc/installer-provisioned)
+Once the setup is complete, you can start the CRC service that runs OpenShift Local with the following command. The command will perform a few system checks to ensure your system meets the minimum requirements and will then ask you to provide an image pull secret. You should have your [Red Hat account](https://cloud.redhat.com/openshift/install/crc/installer-provisioned)
 open so that you can easily copy your image pull secret when prompted.
 
 ```shell-session
@@ -122,10 +122,10 @@ Use the 'oc' command line interface:
 
 Notice that the output instructs you to configure your `oc-env`, and also includes
 a login command and secret password. The secret is specific to your installation.
-Make note of this command, as you will use it to login to CRC on your development
+Make note of this command, as you will use it to login to OpenShift Local (CRC) on your development
 host later.
 
-### Configure CRC environment
+### Configure OpenShift Local CRC environment
 
 Next, configure the environment as instructed by CRC using the following command.
 
@@ -138,7 +138,7 @@ $ eval $(crc oc-env)
 Next, use the login command you made note of before to authenticate with the OpenShift cluster.
 
 -> **Note** You will have to replace the secret password below with the value output
-by CRC.
+by OpenShift Local CRC.
 
 ```shell-session
 $ oc login -u kubeadmin -p <redacted> https://api.crc.testing:6443
@@ -151,7 +151,7 @@ Using project "default".
 
 ### Verify configuration
 
-Validate that your CRC setup was successful with the following command.
+Validate that your OpenShift Local CRC setup was successful with the following command.
 
 ```shell-session
 $ kubectl cluster-info
@@ -679,7 +679,7 @@ Stopped the OpenShift cluster
 
 </CodeBlockConfig>
 
-### Delete CRC
+### Delete OpenShift Local CRC
 
 Next, issue the following command to delete the cluster.
 
@@ -687,7 +687,7 @@ Next, issue the following command to delete the cluster.
 $ crc delete
 ```
 
-The CRC CLI will ask you to confirm that you want to delete the cluster.
+The OpenShift Local CRC CLI will ask you to confirm that you want to delete the cluster.
 
 Example prompt:
 
