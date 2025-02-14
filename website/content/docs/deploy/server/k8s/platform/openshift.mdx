@@ -21,10 +21,10 @@ To deploy Consul on Openshift, you will need:
 
 - Access to a Kubernetes cluster deployed with OpenShift
 - A Red Hat account
-- [Red Hat OpenShift Local 4.17](https://docs.redhat.com/en/documentation/openshift_container_platform/4.17)
+- [Red Hat OpenShift Local 2.47.0](https://console.redhat.com/openshift/create/local)
 - [consul v1.18.6+](/consul/install/)
 - [Helm v3.6+](https://helm.sh/docs/helm/helm_install/)
-- [consul-k8s v1.6.2+](/consul/docs/reference-cli/consul-k8s#install-the-cli)
+- [consul-k8s v1.6.1+](/consul/docs/reference-cli/consul-k8s#install-the-cli)
 
 ## Deploy OpenShift
 
@@ -40,26 +40,24 @@ After installing OpenShift Local, issue the following command to setup your envi
 
 ```shell-session
 $ crc setup
-INFO Using bundle path /Users/hashicorp/.crc/cache/crc_vfkit_4.17.10_arm64.crcbundle
+INFO Using bundle path /Users/hashicorp/.crc/cache/crc_vfkit_4.17.14_arm64.crcbundle
 INFO Checking if running macOS version >= 13.x
 INFO Checking if running as non-root
 INFO Checking if crc-admin-helper executable is cached
 INFO Checking if running on a supported CPU architecture
 INFO Checking if crc executable symlink exists
-INFO Creating symlink for crc executable
 INFO Checking minimum RAM requirements
 INFO Check if Podman binary exists in: /Users/hashicorp/.crc/bin/oc
 INFO Checking if running emulated on Apple silicon
 INFO Checking if vfkit is installed
 INFO Checking if CRC bundle is extracted in '$HOME/.crc'
-INFO Checking if /Users/hashicorp/.crc/cache/crc_vfkit_4.17.10_arm64.crcbundle exists
+INFO Checking if /Users/hashicorp/.crc/cache/crc_vfkit_4.17.14_arm64.crcbundle exists
 INFO Getting bundle for the CRC executable
-INFO Downloading bundle: /Users/hashicorp/.crc/cache/crc_vfkit_4.17.10_arm64.crcbundle...
-
-5.06 GiB / 5.06 GiB [----------------------------------------------------------------] 100.00% 2.93 MiB/s
-INFO Uncompressing /Users/hashicorp/.crc/cache/crc_vfkit_4.17.10_arm64.crcbundle
-crc.img:  31.00 GiB / 31.00 GiB [---------------------------------------------------------------] 100.00%
-oc:  125.37 MiB / 125.37 MiB [------------------------------------------------------------------] 100.00%
+INFO Downloading bundle: /Users/hashicorp/.crc/cache/crc_vfkit_4.17.14_arm64.crcbundle...
+4.86 GiB / 4.86 GiB [---------------------------------------] 100.00% 1.81 MiB/s
+INFO Uncompressing /Users/hashicorp/.crc/cache/crc_vfkit_4.17.14_arm64.crcbundle
+crc.img:  31.00 GiB / 31.00 GiB [-------------------------------------------------------------] 100.00%
+oc:  125.37 MiB / 125.37 MiB [----------------------------------------------------------------] 100.00%
 INFO Checking if old launchd config for tray and/or daemon exists
 INFO Checking if crc daemon plist file is present and loaded
 INFO Adding crc daemon plist file and loading it
@@ -69,12 +67,11 @@ Your system is correctly setup for using CRC. Use 'crc start' to start the insta
 
 ### OpenShift Local start
 
-Once the setup is complete, you can start the CRC service that runs OpenShift Local with the following command. The command will perform a few system checks to ensure your system meets the minimum requirements and will then ask you to provide an image pull secret. You should have your [Red Hat account](https://console.redhat.com/openshift/create/local)
-open so that you can easily copy your image pull secret when prompted.
+Once the setup is complete, you can start the CRC service that runs OpenShift Local with the following command. The command will perform a few system checks to ensure your system meets the minimum requirements and will then ask you to provide an image pull secret. You should have your [Red Hat account](https://console.redhat.com/openshift/create/local) open so that you can easily copy your image pull secret when prompted.
 
 ```shell-session
 $ crc start
-INFO Using bundle path /Users/hashicorp/.crc/cache/crc_vfkit_4.17.10_arm64.crcbundle
+INFO Using bundle path /Users/hashicorp/.crc/cache/crc_vfkit_4.17.14_arm64.crcbundle
 INFO Checking if running macOS version >= 13.x
 INFO Checking if running as non-root
 INFO Checking if crc-admin-helper executable is cached
@@ -87,7 +84,7 @@ INFO Checking if vfkit is installed
 INFO Checking if old launchd config for tray and/or daemon exists
 INFO Checking if crc daemon plist file is present and loaded
 INFO Checking SSH port availability
-INFO Loading bundle: crc_vfkit_4.17.10_arm64...
+INFO Loading bundle: crc_vfkit_4.17.14_arm64...
 CRC requires a pull secret to download content from Red Hat.
 You can copy it from the Pull Secret section of https://console.redhat.com/openshift/create/local.
 ? Please enter the pull secret 
@@ -100,7 +97,7 @@ Example output:
 <CodeBlockConfig hideClipboard>
 
 ```plain-text
-INFO Creating CRC VM for OpenShift 4.17.10...
+INFO Creating CRC VM for OpenShift 4.17.14...
 INFO Generating new SSH key pair...
 INFO Generating new password for the kubeadmin user
 
@@ -131,7 +128,7 @@ a login command and secret password. The secret is specific to your installation
 Make note of this command, as you will use it to login to OpenShift Local (CRC) on your development
 host later.
 
-### Configure OpenShift Local CRC environment
+### Configure OpenShift Local (CRC) environment
 
 Next, configure the environment as instructed by CRC using the following command.
 
@@ -147,7 +144,7 @@ Next, use the login command you made note of before to authenticate with the Ope
 by OpenShift Local CRC.
 
 ```shell-session
-$ oc login -u developer -p developer https://api.crc.testing:6443
+$ oc login -u kubeadmin -p <redacted> https://api.crc.testing:6443
 Login successful.
 
 You don't have any projects. You can try to create a new project, by running
@@ -185,14 +182,14 @@ to build a new example application in Ruby. Or use kubectl to deploy a simple Ku
 
 ### Create an image pull secret for a RedHat Registry service account
 
-You must create an image pull secret before authenticating to the RedHat Registry and pulling images from the container registry. You must first create a registry service account on the [RedHat Customer Portal](https://access.redhat.com/terms-based-registry/), and then apply the OpenShift secret that is associated with the registry service account as shown below:
+You must create an image pull secret before authenticating to the RedHat Registry and pulling images from the container registry. You must first create a registry service account on the [RedHat Customer Portal](https://access.redhat.com/terms-based-registry/), and then download and apply the OpenShift secret that is associated with the registry service account as shown below. In this case, the name of the downloaded file was `15490118-openshift-secret.yml` - yours will differ.
 
 ```shell-session 
-$ kubectl create -f openshift-secret.yml --namespace=consul
+$ kubectl create -f 15490118-openshift-secret.yml --namespace=consul
 secret/15490118-openshift-secret-secret created
 ```
 
-In the Helm chart values file, use the output of previous command and update the attribute `imagePullSecrets` stanza with its value.
+You will get a confirmation for the creation of a Kubernetes secret, alongside its name. Make a note of this name now, as later you will have to use it in the Helm chart values file, specifically in the `imagePullSecrets` stanza. In this case, the name is `15490118-openshift-secret-secret`.
 
 ## Deploy Consul
 
@@ -205,7 +202,7 @@ The process to deploy Consul servers on Openshift clusters consists of the follo
 
 ## Configure Helm values
 
-To customize your deployment, you can pass a YAML configuration file to be used during the deployment. Any values specified in the values file will override the Helm chart's default settings. The following example file sets the `global.openshift.enabled` entry to true, which is required to operate Consul on OpenShift. Generate a file named `values.yaml` that you will reference in the `helm install` command later.
+To customize your deployment, you can pass a YAML configuration file to be used during the deployment. Any values specified in the values file will override the Helm chart's default settings. The following example file sets the `global.openshift.enabled` entry to true, which is required to operate Consul on OpenShift. Generate a file named `values.yaml` that you will reference in the `helm install` command later. Don't forget to modify the `imagePullSecrets` variable to the name generated in the previous step.
 
 <CodeBlockConfig filename="values.yaml">
 
@@ -213,7 +210,7 @@ To customize your deployment, you can pass a YAML configuration file to be used 
 global:
   name: consul
   datacenter: dc1
-  image: registry.connect.redhat.com/hashicorp/consul:1.18.2-ubi
+  image: registry.connect.redhat.com/hashicorp/consul:1.20.3-ubi
   imageK8S: registry.connect.redhat.com/hashicorp/consul-k8s-control-plane:1.6.1-ubi
   imageConsulDataplane: registry.connect.redhat.com/hashicorp/consul-dataplane:1.6.1-ubi
   imagePullSecrets:
@@ -252,7 +249,7 @@ Search your local repo for the Consul Helm chart.
 ```shell-session
 $ helm search repo hashicorp/consul
 NAME            	CHART VERSION	APP VERSION	DESCRIPTION
-hashicorp/consul	1.4.8        	1.18.2     	Official HashiCorp Consul Chart
+hashicorp/consul	1.6.1        	1.20.2     	Official HashiCorp Consul Chart
 ```
 
 If the correct version is not displayed in the output, try
@@ -262,16 +259,32 @@ updating your helm repo.
 $ helm repo update
 Hang tight while we grab the latest from your chart repositories...
 ...Successfully got an update from the "hashicorp" chart repository
+Update Complete. ⎈Happy Helming!⎈
 ```
 
 ## Import images from RedHat Catalog
 
-Instead of pulling images directly from the RedHat Registry, Consul and Consul on Kubernetes images could also be pre-loaded onto the internal OpenShift registry using the `oc import` command. Read more about importing images into the internal OpenShift Registry in the RedHat OpenShift [cookbook](https://cookbook.openshift.org/image-registry-and-image-streams/how-do-i-import-an-image-from-an-external-image.html)
+Instead of pulling images directly from the RedHat Registry, Consul and Consul on Kubernetes images could also be pre-loaded onto the internal OpenShift registry using the `oc import` command. Read more about importing images into the internal OpenShift Registry in the RedHat OpenShift [cookbook](https://cookbook.openshift.org/image-registry-and-image-streams/how-do-i-import-an-image-from-an-external-image.html).
 
 ```shell-session
-$ oc import-image hashicorp/consul:1.18.2-ubi --from=registry.connect.redhat.com/hashicorp/consul:1.18.2-ubi --confirm
+$ oc import-image hashicorp/consul:1.20.3-ubi --from=registry.connect.redhat.com/hashicorp/consul:1.20.3-ubi --confirm
+imagestream.image.openshift.io/consul imported
+
+<output omitted for brevity>
+```
+
+```shell-session
 $ oc import-image hashicorp/consul-k8s-control-plane:1.6.1-ubi --from=registry.connect.redhat.com/hashicorp/consul-k8s-control-plane:1.6.1-ubi --confirm
-$ oc import-image hashicorp/consul-dataplane:1.0.0-ubi --from=registry.connect.redhat.com/hashicorp/consul-dataplane:1.0.0-ubi --confirm
+imagestream.image.openshift.io/consul-k8s-control-plane imported
+
+<output omitted for brevity>
+```
+
+```shell-session
+$ oc import-image hashicorp/consul-dataplane:1.6.1-ubi --from=registry.connect.redhat.com/hashicorp/consul-dataplane:1.6.1-ubi --confirm
+imagestream.image.openshift.io/consul-dataplane imported
+
+<output omitted for brevity>
 ```
 
 ## Install Consul in your cluster
@@ -288,11 +301,11 @@ installation should:
 - Use the `hashicorp/consul` chart you downloaded in the last step
 - Set your Consul installation name to `consul`
 - Create Consul resources in the `consul` namespace
-- Use `consul-helm` chart version `1.4.8`
+- Use `consul-helm` chart version `1.6.1`
 
 
 ```shell-session
-$ helm install consul hashicorp/consul --values values.yaml --create-namespace --namespace consul --version "1.4.8" --wait
+$ helm install consul hashicorp/consul --values values.yaml --create-namespace --namespace consul --version "1.6.1" --wait
 ```
 
 The output will be similar to the following.
@@ -363,8 +376,7 @@ Once all pods have a status of `Running`, enter `CTRL-C` to stop the watch.
 
 ## Access the Consul UI
 
-Now that Consul has been deployed, you can access the Consul UI to verify that the Consul installation was successful,
-and that the environment is healthy.
+Now that Consul has been deployed, you can access the Consul UI to verify that the Consul installation was successful, and that the environment is healthy.
 
 ### Expose the UI service to the host
 
@@ -395,8 +407,8 @@ Consul datacenter members.
 ```shell-session
 $ consul members
 Node                Address            Status  Type    Build   Protocol  DC   Partition  Segment
-consul-server-0     10.217.0.106:8301  alive   server  1.14.3  2         dc1  default    <all>
-crc-dzk9v-master-0  10.217.0.104:8301  alive   client  1.14.3  2         dc1  default    <default>
+consul-server-0     10.217.0.106:8301  alive   server  1.20.3  2         dc1  default    <all>
+crc-dzk9v-master-0  10.217.0.104:8301  alive   client  1.20.3  2         dc1  default    <default>
 ```
 
 You can use the same URL to make HTTP API requests with your custom code.
