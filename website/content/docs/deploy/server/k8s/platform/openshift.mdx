@@ -28,11 +28,10 @@ To deploy Consul on Openshift, you will need:
 
 ## Deploy OpenShift
 
-You can deploy OpenShift on multiple [platforms](https://docs.openshift.com/container-platform/4.17/architecture/architecture-installation.html#supported-platforms-for-openshift-clusters_architecture-installation), and there are several installation options available for installing OpenShift on either production and development environments. This guide requires a running OpenShift cluster to deploy Consul on Kubernetes. If an OpenShift cluster is already provisioned in a production or development environment to be used for deploying Consul on Kubernetes, skip ahead to [Deploy Consul](#deploy-consul).
+You can deploy OpenShift on multiple platforms, and there are several installation options available for installing OpenShift on either production and development environments. This guide requires a running OpenShift cluster to deploy Consul on Kubernetes. If an OpenShift cluster is already provisioned in a production or development environment to be used for deploying Consul on Kubernetes, skip ahead to [Deploy Consul](#deploy-consul).
 
-This tutorial will use OpenShift Local to provide a pre-configured development OpenShift environment on your local machine. OpenShift Local is bundled as a Red Hat Enterprise Linux virtual machine that supports native hypervisors for Linux, macOS, and Windows 10. OpenShift Local is the quickest way to get started building OpenShift clusters. It is designed to run on a local computer to simplify setup and emulate the cloud development environment locally with all the tools needed to develop container-based apps. While we use OpenShift Local in this tutorial, the Consul Helm deployment process will work on any OpenShift cluster and is production ready.
+These instructions use OpenShift Local to provide a pre-configured development OpenShift environment on your local machine. OpenShift Local is bundled as a Red Hat Enterprise Linux virtual machine that supports native hypervisors for Linux, macOS, and Windows 10. OpenShift Local is the quickest way to get started building OpenShift clusters. It is designed to run on a local computer to simplify setup and emulate the cloud development environment locally with all the tools needed to develop container-based apps. While we use OpenShift Local, the Consul Helm deployment process works on any OpenShift cluster and is production ready.
 
-If locally deploying OpenShift is not preferred, a managed OpenShift cluster could quickly be provisioned within less than an hour using [Azure RedHat OpenShift](https://docs.microsoft.com/en-us/azure/openshift/tutorial-create-cluster). [Azure RedHat Openshift](https://docs.microsoft.com/en-us/azure/openshift/intro-openshift) requires an Azure subscription. However, it provides the simplest installation flow for getting a production-ready OpenShift cluster available to be used for this tutorial. 
 
 ### OpenShift Local Setup
 
@@ -67,7 +66,7 @@ Your system is correctly setup for using CRC. Use 'crc start' to start the insta
 
 ### OpenShift Local start
 
-Once the setup is complete, you can start the CRC service that runs OpenShift Local with the following command. The command will perform a few system checks to ensure your system meets the minimum requirements and will then ask you to provide an image pull secret. You should have your [Red Hat account](https://console.redhat.com/openshift/create/local) open so that you can easily copy your image pull secret when prompted.
+After the setup is complete, you can start the CRC service that runs OpenShift Local with the following command. The command performs a few system checks to ensure your system meets the minimum requirements and then asks you to provide an image pull secret. [Open your Red Hat account](https://console.redhat.com/openshift/create/local) so that you can easily copy your image pull secret when prompted.
 
 ```shell-session
 $ crc start
@@ -125,7 +124,7 @@ Use the 'oc' command line interface:
 
 Notice that the output instructs you to configure your `oc-env`, and also includes
 a login command and secret password. The secret is specific to your installation.
-Make note of this command, as you will use it to login to OpenShift Local (CRC) on your development
+Make note of this command. You need it to login to OpenShift Local (CRC) on your development
 host later.
 
 ### Configure OpenShift Local (CRC) environment
@@ -182,14 +181,14 @@ to build a new example application in Ruby. Or use kubectl to deploy a simple Ku
 
 ### Create an image pull secret for a RedHat Registry service account
 
-You must create an image pull secret before authenticating to the RedHat Registry and pulling images from the container registry. You must first create a registry service account on the [RedHat Customer Portal](https://access.redhat.com/terms-based-registry/), and then download and apply the OpenShift secret that is associated with the registry service account as shown below. In this case, the name of the downloaded file was `15490118-openshift-secret.yml` - yours will differ.
+You must create an image pull secret before authenticating to the RedHat Registry and pulling images from the container registry. First, create a registry service account on the [RedHat Customer Portal](https://access.redhat.com/terms-based-registry/). Then download and apply the OpenShift secret that is associated with the registry service account. In the following example, the name of the downloaded file was `15490118-openshift-secret.yml`, but your filename will differ.
 
 ```shell-session 
 $ kubectl create -f 15490118-openshift-secret.yml --namespace=consul
 secret/15490118-openshift-secret-secret created
 ```
 
-You will get a confirmation for the creation of a Kubernetes secret, alongside its name. Make a note of this name now, as later you will have to use it in the Helm chart values file, specifically in the `imagePullSecrets` stanza. In this case, the name is `15490118-openshift-secret-secret`.
+You receive a confirmation for the creation of a Kubernetes secret, alongside its name. Make a note of this name now. You will use it in the Helm chart values file, specifically in the `imagePullSecrets` stanza. In the following example case, the name is `15490118-openshift-secret-secret`.
 
 ## Deploy Consul
 
@@ -202,7 +201,9 @@ The process to deploy Consul servers on Openshift clusters consists of the follo
 
 ## Configure Helm values
 
-To customize your deployment, you can pass a YAML configuration file to be used during the deployment. Any values specified in the values file will override the Helm chart's default settings. The following example file sets the `global.openshift.enabled` entry to true, which is required to operate Consul on OpenShift. Generate a file named `values.yaml` that you will reference in the `helm install` command later. Don't forget to modify the `imagePullSecrets` variable to the name generated in the previous step.
+To customize your deployment, you can pass a YAML configuration file to be used during the deployment. Any values specified in the values file will override the Helm chart's default settings. The following example file sets the `global.openshift.enabled` entry to true, which is required to operate Consul on OpenShift. 
+
+Create a file named `values.yaml`, and modify it for your deployment. Remember to modify `imagePullSecrets` with to the name generated in the previous step.
 
 <CodeBlockConfig filename="values.yaml">
 
@@ -264,7 +265,7 @@ Update Complete. ⎈Happy Helming!⎈
 
 ## Import images from RedHat Catalog
 
-Instead of pulling images directly from the RedHat Registry, Consul and Consul on Kubernetes images could also be pre-loaded onto the internal OpenShift registry using the `oc import` command. Read more about importing images into the internal OpenShift Registry in the RedHat OpenShift [cookbook](https://cookbook.openshift.org/image-registry-and-image-streams/how-do-i-import-an-image-from-an-external-image.html).
+Instead of pulling images directly from the RedHat Registry, Consul and Consul on Kubernetes images could also be pre-loaded onto the internal OpenShift registry using the `oc import` command. Read more about [importing images into the internal OpenShift Registry in the RedHat OpenShift cookbook](https://cookbook.openshift.org/image-registry-and-image-streams/how-do-i-import-an-image-from-an-external-image.html).
 
 ```shell-session
 $ oc import-image hashicorp/consul:1.20.3-ubi --from=registry.connect.redhat.com/hashicorp/consul:1.20.3-ubi --confirm
@@ -338,7 +339,7 @@ https://www.consul.io/docs/reference/k8s/consul-k8s-cli
 
 Consul K8s CLI is a tool for quickly installing and interacting with Consul on Kubernetes. Ensure that you are installing the correct version of the CLI for your Consul on Kubernetes deployment, as the CLI and the control plane are version dependent.
 
-In order to install the latest version of the Consul K8s CLI depending on your operating system, follow the instructions [here](/consul/docs/k8s/installation/install-cli#install-the-cli). You can review the official [Consul K8S CLI documentation](/consul/docs/reference-cli/consul-k8s) to learn more about additional settings.
+To get started with the Consul K8s CLI, follow the instructions [to install the CLI to your local system](/consul/docs/k8s/installation/install-cli#install-the-cli). Refer to the [Consul K8S CLI documentation](/consul/docs/reference-cli/consul-k8s) to learn more about additional settings.
 
 ```shell-session
 $ consul-k8s install -config-file=values.yaml
@@ -376,7 +377,7 @@ Once all pods have a status of `Running`, enter `CTRL-C` to stop the watch.
 
 ## Access the Consul UI
 
-Now that Consul has been deployed, you can access the Consul UI to verify that the Consul installation was successful, and that the environment is healthy.
+After you deploy Consul, you can access the Consul UI to verify that the Consul installation was successful, and that the environment is healthy.
 
 ### Expose the UI service to the host
 
@@ -415,6 +416,6 @@ You can use the same URL to make HTTP API requests with your custom code.
 
 ## Next steps
 
-The Consul server you created is not ready for production. The chart was installed with an insecure configuration of Consul that you still need to secure. Refer to the [Secure Consul](/consul/docs/secure/) to learn how you can secure Consul servers for use in production environments.
+The Consul server you created is not ready for production. The chart was installed with an insecure configuration of Consul that you still need to secure. Refer to [Secure Consul](/consul/docs/secure/) to learn how you can secure Consul servers for use in production environments.
 
-For more information on the Consul Helm chart configuration options, review the [consul-helm chart documentation](/consul/docs/reference/k8s/helm).
+For more information on the Consul Helm chart configuration options, review the [Consul Helm chart reference documentation](/consul/docs/reference/k8s/helm).

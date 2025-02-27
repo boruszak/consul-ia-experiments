@@ -16,19 +16,21 @@ Disaster recovery is an important part of business continuity planning. Your str
 - **Recovery point objective (RPO)** - The maximum amount of data loss that can be incurred from a disaster, failure, or comparable event. RPO is measured as a unit of time and there is usually a 1-to-1 correlation between RPO and backup frequency.
 - **Recovery time objective (RTO)** - The amount of time that passes between application failure and full availability which includes how much time it takes to recover from the disaster or failure. RTO could be relatively short for a customer that already has another datacenter location available for disaster recovery purposes and replication of services and data occurs on a regular basis. You can also leverage leverage automation technologies to recover more quickly from a disaster.
 
-In the event of a loss of quorum in a Consul cluster or a complete loss of the cluster, to restore you will need to build a new Consul cluster from the latest snapshot. Consul client agents may also need to be re-installed/reconfigured. Automation technologies can greatly reduce the amount of time that it will take to perform these steps. Keep this in mind when considering RPO and RTO.
+When a Consul cluster loses quorum, or if you lose the server agents completely, restoration requires you to build a new Consul cluster from the latest snapshot. You may also need to reinstall and configure Consul client agents. Automation technologies can greatly reduce the amount of time that it will take to perform these steps. Keep these facts in in mind when deciding between RPO and RTO.
 
 ## Snapshot recommendations
 
-The recommended method of backing up Consul state is to use the built-in Consul [snapshot](/consul/commands/snapshot) command accessed via the API or CLI. This will ensure a consistent and atomic point-in-time capture of the Consul cluster state. The tutorial [Backup Consul Data and State](/consul/tutorials/production-deploy/backup-and-restore) covers this in further detail. 
+Our recommended method for backing up Consul state uses the [built-in Consul snapshot feature](/consul/commands/snapshot), which is available through the HTTP API or CLI. The tutorial [Backup Consul Data and State](/consul/tutorials/production-deploy/backup-and-restore) covers this in further detail. 
 
-Consul snapshots contain extremely sensitive data (e.g. credentials in recoverable form) and therefore should only be stored on an encrypted medium with sufficiently strict access controls in place.
+<Warning heading="Security warning">
+Consul snapshots contain extremely sensitive data, such as credentials in recoverable form. Store snapshots on an encrypted medium with sufficiently strict access controls in place.
+</Warning>
 
-Snapshots should be taken on a regular basis and should be stored on mounted or external storage, instead of local or ephemeral storage. We suggest the use of object storage versus block or file based storage - for example Azure blobs, Google Cloud storage, or AWS S3 storage. 
+You should take snapshots of Consul clusters on a regular basis and store them on mounted or external storage.  We suggest the use of object storage versus block or file based storage, such as Azure blobs, Google Cloud storage, or AWS S3 storage. Avoid local or ephemeral storage.
 
-They can be automated through the use of scripting, 3rd party tools, or the [Snapshot agent](/consul/commands/snapshot/agent) feature of Consul Enterprise. This last feature offers the ability to automatically back up Consul state to cloud storage (e.g. AWS S3, Azure Blob, etc).
+You can automate this process using the [Consul Enterprise Snapshot agent](/consul/commands/snapshot/agent).
 
-You should regularly test and validate the restore process for critical systems to ensure that everything works as expected. This is typically defined within a _Disaster recovery plan (DRP)_, which is a formal document created by an organization that contains the processes used to recover access to systems and data after a catastrophic event. DRPs will typically also include a set of processes for testing and validating disaster recovery procedures and establish a regular cadence for these events.  
+We recommend that you regularly test and validate the restore process for critical systems to ensure that everything works as expected. This testing process is typically defined in a _Disaster recovery plan (DRP)_, which is a formal document created by an organization that contains the processes used to recover access to systems and data after a catastrophic event. DRPs typically also include a set of processes for testing and validating disaster recovery procedures and establish a regular cadence for these events.  
 
 ## ACL considerations
 
@@ -42,9 +44,9 @@ When you restore a snapshot to a new Consul cluster, note the following behavior
 | Yes  | Yes  | No  |
 | No  | No  | Yes  |
 
-- If [token persistence](/consul/docs/reference/agent/configuration-file) was enabled on client agents **prior** to performing a snapshot restore, then the client agents will continue to function after the restore.
-- If the ACL token is specified directly in the [client agent configuration](/consul/docs/reference/agent/configuration-file) **prior** to performing a snapshot restore, then the client agents will continue to function after the restore.
-- If neither of the above options were configured **prior** to a snapshot restore, then client agents will not function after the restore as they will not have permissions to register with the new Consul cluster. This would be relevant if the ACL token was set via the API/CLI or if the ACL token was set via an environment variable. To override an API/CLI token, use the [acl set-agent-token](/consul/commands/acl/set-agent-token#agent) command; and to override an environment variable token, set the `CONSUL_HTTP_TOKEN` variable.
+- If [token persistence was enabled on client agents](/consul/docs/reference/agent/configuration-file#acl_enable_token_persistence) when the snapshot was captured, then the client agents will resume function after you restore the cluster's server agents.
+- If [the ACL token is specified directly in the client agent configuration](/consul/docs/reference/agent/configuration-file#acl_tokens_agent) when when the snapshot was captured, then the client agents resume function after you restore the cluster's server agents.
+- If client agents were not configured in a way that persists access to a token, then client agents will not resume function after the restore because they not have permissions to register with the new Consul cluster. This situation applies when the ACL token was set using the API or CLI, or if the ACL token was set in an environment variable. Use the [`consul acl set-agent-token` command](/consul/commands/acl/set-agent-token#agent) or the `CONSUL_HTTP_TOKEN` variable to update the token on client agents before you restore a cluster with a snapshot.
 
 ## Service failure recommendations
 
@@ -52,13 +54,13 @@ To architect against outages caused by disasters that impact services registered
 
 ## Region failure recommendations
 
-In the event of a total region failure, Consul and your services are likely down. To architect against this situation, deploy Consul and your services [in multiple regions with a global failover policy](/consul/tutorials/operate-consul/redundancy-zones) that reroutes network traffic to the alternate region during a disaster. Deploying identical Consul servers and services across multiple cloud regions satisfies datacenter latency requirements and limits the blast radius during large-scale disasters.
+In the event of a total region failure, Consul and your services are likely down. To architect against this situation, [deploy Consul and your services in multiple regions with a global failover policy](/consul/tutorials/operate-consul/redundancy-zones) so that Consul reroutes network traffic to the alternate region during a disaster. Deploying identical Consul servers and services across multiple cloud regions satisfies datacenter latency requirements and limits the blast radius during large-scale disasters.
 
 ## Multi-cluster disaster recovery considerations
 
-The disaster recovery considerations for single Consul cluster deployments apply to Consul multi-cluster deployments, however, there a few additional considerations that are specific to Consul multi-cluster deployments.
+The disaster recovery considerations for single Consul cluster deployments apply to Consul multi-cluster deployments as well. However, there a few additional considerations that are specific to Consul multi-cluster deployments using WAN Federation.
 
-When you design and architect your Consul environment, it is important to consider the critical role of the primary datacenter within the multi-cluster deployment. The primary Consul datacenter serves as the source of truth for the following data.
+When you design and architect your WAN-federated Consul environment, it is important to consider the critical role of the primary datacenter in the multi-cluster deployment. The primary Consul datacenter serves as the source of truth for the following data.
 
 1. Certificate Authority management, if you use the built-in Consul CA. The root CA resides in the primary Consul datacenter and must sign the certificates for the additional Consul datacenters. 
 1. ACLs
@@ -72,7 +74,7 @@ Once you establish and federate a primary Consul datacenter; you cannot migrate,
 
 This approach provides two distinct advantages.
 
-- It becomes easier to move the primary Consul datacenter. For example, you may want to migrate it from an on premises datacenter to a cloud environment. Typically, this would entail performing a backup and restore of the primary Consul datacenter to the alternate location. Review the [Disaster Recovery for the Primary Datacenter](/consul/tutorials/datacenter-operations/recovery-outage-primary) tutorial for guidance on restoring a Consul cluster. 
+- It becomes easier to move the primary Consul datacenter. For example, you may want to migrate it from an on premises datacenter to a cloud environment. Typically, this would entail performing a backup and restore of the primary Consul datacenter to the alternate location. Review the [Disaster Recovery for the Primary Datacenter tutorial](/consul/tutorials/datacenter-operations/recovery-outage-primary) for guidance on restoring a Consul cluster. 
 - In the event of a disaster, the additional Consul datacenters can still continue to function independently of the primary Consul datacenter although functionality will be reduced until the primary Consul datacenter is brought back online. See the table below for more details. 
 
 ### Primary Consul datacenter outage behaviors
