@@ -287,6 +287,19 @@ Inspect the status of the Consul server pods called `consul-server-<X>` and whet
 
 If any of the pods are in a status other than `Running`, you can further inspect their state by running `kubectl describe pods <PODNAME>`. Refer to the [Debug Kubernetes Pods](https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/) article for further troubleshooting of the deployment's pods.
 
+### OpenShift
+
+Instead of pulling images directly from the RedHat Registry, Consul and Consul on Kubernetes images could also be pre-loaded onto the internal OpenShift registry from an external image registry using the `oc import-image` command. 
+
+If there is already an old version imported with `oc import-image` present, the local image will be updated. For example, to locally cache the Consul image version `1.20.5-ubi`, run the following command:
+
+```shell-session
+$ oc import-image hashicorp/consul:1.20.5-ubi --from=registry.connect.redhat.com/hashicorp/consul:1.20.5-ubi --confirm
+imagestream.image.openshift.io/consul imported
+```
+
+The list of possible images to cache locally includes `consul`, `consul-k8s-control-plane` and `consul-dataplane`. 
+
 ## External tools
 
 Consul was designed to work within an established ecosystem of networking
