@@ -300,6 +300,8 @@ imagestream.image.openshift.io/consul imported
 
 The list of possible images to cache locally includes `consul`, `consul-k8s-control-plane` and `consul-dataplane`. 
 
+If the image registry has invalid HTTPS certificate, or is hosted over HTTP, you can use the `--insecure=true` flag when importing images. Similarly, if the image registry is overloaded and you need to extend the request timeout, you can do so by using the `--request-timeout` flag along with a unit of time. For example, to raise the timeout to five minutes, use `--request-timeout=5m`.
+
 ## External tools
 
 Consul was designed to work within an established ecosystem of networking
