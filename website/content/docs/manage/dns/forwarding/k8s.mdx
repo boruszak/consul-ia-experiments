@@ -133,7 +133,7 @@ in full cluster rebuilds.
 
 -> **Note:** If using a different zone than `.consul`, change the key accordingly.
 
-## OpenShift Clusters
+## OpenShift clusters
 
 -> **Note:** OpenShift CLI `oc` is utilized below complete the following steps. You can find more details on how to install OpenShift CLI from [Getting started with OpenShift CLI](https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html).
 
@@ -171,7 +171,8 @@ Save the configuration changes. Next, verify the `dns-default` configmap has bee
 ```shell-session
 $ oc get configmap/dns-default -n openshift-dns -o yaml
 
-<output omitted for brevity>
+
+...
 data:
   Corefile: |
     # consul-server
@@ -189,7 +190,7 @@ data:
             denial 9984 30
         }
     }
-<output omitted for brevity>
+...
 ```
 
 ## Verifying DNS Works
