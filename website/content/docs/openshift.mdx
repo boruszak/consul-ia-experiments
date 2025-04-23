@@ -1,44 +1,30 @@
 ---
 layout: docs
-page_title: Consul on OpenShift
+page_title: Consul on RedHat OpenShift
 description: >-
   Consul has native OpenShift support, allowing you to deploy Consul sidecars to an OpenShift cluster facilitating a service mesh. Learn how to install Consul on OpenShift with Helm or the Consul K8s CLI and get started with tutorials.
 ---
 
-# Consul on OpenShift
+# Consul on RedHat OpenShift
 
-Consul supports integration with OpenShift. You can deploy Consul to OpenShift using the [Helm chart](/consul/docs/k8s/installation/install#helm-chart-installation) or [Consul K8s CLI](/consul/docs/k8s/installation/install-cli#consul-k8s-cli-installation), sync services between Consul and OpenShift, run Consul Service Mesh, and more.
-This section documents the official integrations between Consul and OpenShift.
+Consul supports the OpenShift runtime. You can deploy Consul to an OpenShift cluster with [the Consul Helm chart](/consul/docs/k8s/installation/install#helm-chart-installation) or the [Consul K8s CLI](/consul/docs/k8s/installation/install-cli#consul-k8s-cli-installation).
 
-## Use Cases
+For help configuring and running OpenShift, refer to the external [RedHat OpenShift Documentation](https://docs.redhat.com/en).
 
-**Consul Service Mesh**: 
-Consul can automatically inject the [Consul Service Mesh](/consul/docs/connect) sidecar into pods so that they can accept and establish encrypted and authorized network connections with mutual TLS. And because Consul Service Mesh can run anywhere, pods and external services can communicate with each other over a fully encrypted connection.
+## Benefits
 
-**Service sync to enable OpenShift and non-OpenShift services to communicate**: 
-Consul can sync OpenShift services with its own service registry. This service sync allows OpenShift services to use OpenShift’s native service discovery capabilities to discover and connect to external services registered in Consul, and for external services to use Consul service discovery to discover and connect to OpenShift services.
+Consul provides the following capabilities to networks with OpenShift clusters:
 
-**Additional integrations**:
-Consul can run directly on OpenShift, so in addition to the native integrations provided by Consul itself, any other tool built for OpenShift can leverage Consul.
+- **Hybrid and multi-cloud service discovery**: Consul can automatically sync OpenShift services with its own service registry. Consul makes the OpenShift services discoverable to the rest of the cluster in its network, which you can expand across hardware and runtimes. At the same time, Consul makes the rest of its services discoverable to OpenShift, with options to limit access according to security requirements. 
+- **Dedicated CLI tool**: The [`consul-k8s` CLI](/consul/docs/reference/cli/consul-k8s) is a dedicated tool for managing Consul deployments on Kubernetes runtimes, including OpenShift clusters. It can help you deploy clusters, update their configurations, interact with sidecar proxies in your service mesh.
 
-## Getting Started With Consul and OpenShift
+## Guidance
 
-There are several ways to try Consul with OpenShift in different environments.
+The following documentation for Consul and RedHat OpenShift is available:
 
-### Tutorials
+- [Install Consul on OpenShift](/consul/docs/deploy/server/k8s/platform/openshift) describes the process to deploy Consul in an OpenShift environment using the Helm chart.
+- [DNS forwarding on OpenShift](/consul/docs/manage/dns/forwarding/k8s#openshift-clusters) describes the process to enable the `consul` sub-domain in your cluster's DNS operations.
+- [Consul DNS views on OpenShift](/consul/docs/manage/dns/views#openshift-clusters) describes the process to deploy a lightweight Consul process in your cluster to return Consul DNS results without bypassing your existing DNS configuration.
+- [Troubleshoot Consul on OpenShift](/consul/docs/troubleshoot#kubernetes-and-openshift-deployments) includes steps to resolve issues that may occur.
 
-- The [Getting Started with Consul Service Mesh track](/consul/tutorials/archive/kubernetes-openshift-red-hat) provides guidance for installing Consul as service mesh on a local instance of OpenShift using the Helm chart, deploying services in the service mesh, and using intentions to secure service communications.
-
-- The [Migrate to Microservices with Consul Service Mesh on Kubernetes](/consul/tutorials/microservices?utm_source=docs) collection uses an example application written by a fictional company to illustrate why and how organizations can migrate from monolith to microservices using Consul service mesh. The case study in this collection should provide information valuable for understanding how to develop services that leverage Consul during any stage of your microservices journey.
-
-- Since OpenShift is a certified Kubernetes powered application platform, the [Consul and Kubernetes Reference Architecture](/consul/tutorials/kubernetes/kubernetes-reference-architecture?utm_source=docs) guide is relevant and provides recommended practices for production.
-
-- The [Secure Consul and Registered Services on Kubernetes](/consul/tutorials/kubernetes/kubernetes-secure-agents?utm_source=docs) tutorial covers the necessary steps to secure a Consul cluster running on a Kubernetes in production, which also applies to an OpenShift deployment.
-
-- The [Layer 7 Observability with Consul Service Mesh](/consul/tutorials/kubernetes/kubernetes-layer7-observability) tutorial covers monitoring a Consul service mesh running on an OpenShift-like microservices platform with Prometheus and Grafana.
-
-### Documentation
-
-- [Installing Consul](/consul/docs/deploy/server/k8s/platform/openshift) covers how to deploy Consul on an OpenShift environment using the Helm chart.
-
-- [Helm Chart Reference](/consul/docs/k8s/helm) describes the different options for configuring the Helm chart.
+For more information about Helm configurations for Consul on OpenShift, refer to the [Helm Chart reference documentation](/consul/docs/reference/k8s/helm).
