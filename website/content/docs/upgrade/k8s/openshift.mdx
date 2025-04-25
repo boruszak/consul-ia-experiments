@@ -1,13 +1,13 @@
 ---
 layout: docs
-page_title: Upgrading Consul on RedHat OpenShift
+page_title: Upgrade Consul version on RedHat OpenShift clusters
 description: >-
   Learn how to update Consul on RedHat OpenShift, its configurations, Helm versions, Consul versions, and Consul agents, as well as how to determine what will change and its impact on your service mesh.
 ---
 
-# Upgrading Consul on RedHat OpenShift
+# Upgrade Consul version on RedHat OpenShift clusters
 
-This page describes considerations and strategies for upgrading Consul deployments running on OpenShift clusters. When Consul runs on OpenShift clusters, there are two sides to the deployment - a Helm chart located in Docker Hub, and a Consul container from the Red Hat Ecosystem Catalog. In addition to upgrading the container of Consul, you may need to update your Helm chart as well.
+This page describes process and considerations to upgrade the version of Consul deployments running on OpenShift clusters. When Consul runs on OpenShift clusters, there are two packages to update: a Helm chart located in Docker Hub and a Consul container from the Red Hat Ecosystem Catalog. That means that you may need to update the container image and the Helm chart version.
 
 ## Upgrade types
 
@@ -21,11 +21,11 @@ The upgrade procedure you use depends on the type of upgrade you are performing.
 
 ## Determine scope of changes
 
-Before upgrading, it is important to understand the changes that affect your cluster. For example, you need to take more care if your upgrade results in the Consul server StatefulSet being redeployed.
+Before upgrading, it is important to understand the changes that affect your cluster. 
 
-There is no built-in functionality in Helm that shows what a Helm upgrade changes. There is, however, a Helm plugin [helm-diff](https://github.com/databus23/helm-diff) that can be used.
+There is no built-in functionality in Helm that shows what a Helm upgrade changes, but [Helm plugin `helm-diff`](https://github.com/databus23/helm-diff) is available.
 
-1. Install `helm-diff` with:
+1. Install `helm-diff`.
 
   ```shell-session
   $ helm plugin install https://github.com/databus23/helm-diff
@@ -39,11 +39,11 @@ There is no built-in functionality in Helm that shows what a Helm upgrade change
   consul	consul  	1       	2025-04-22 14:39:13.599498 +0200 CEST	deployed	consul-1.4.0	1.18.0
   ```
 
-  In this example, chart version `1.4.0` is being used along with Consul version `1.18.0`, and is installed in the `consul` namespace.
+  In this example, the current Helm chart version is `1.4.0`. It runs with Consul version `1.18.0`, and is installed in the OpenShift clusters' `consul` namespace.
 
-1. If you are updating your `values.yaml` file, do so now. For example, edit the `global.image` stanza to `image: registry.connect.redhat.com/hashicorp/consul:1.18.2-ubi`
+1. Update Consul's configuration in your `values.yaml` file. To upgrade the image version from v1.18.0 to v1.18.2, edit the `global.image` stanza to `image: registry.connect.redhat.com/hashicorp/consul:1.18.2-ubi`
 
-1. Take the same `helm upgrade` command you were planning to issue but perform `helm diff upgrade` instead of `helm upgrade`:
+1. Run `helm diff upgrade` with your updated file.
 
   ```shell-session
   $ helm diff upgrade consul hashicorp/consul --namespace consul --version 1.4.0 --values /path/to/your/values.yaml
@@ -62,26 +62,24 @@ There is no built-in functionality in Helm that shows what a Helm upgrade change
 
   This command prints out the manifests that will be updated and their diffs.
 
-1. To see only updated objects, add `| grep "has changed"`:
+   To return only updated objects, add `| grep "has changed"`.
 
   ```shell-session
   $ helm diff upgrade consul hashicorp/consul --namespace consul --version 1.4.0 --values /path/to/your/values.yaml | grep "has changed"
   default, consul-server, StatefulSet (apps) has changed:
   ```
 
-1. Take specific note if `consul-server, StatefulSet` is listed, as it means your Consul server statefulset will be redeployed.
+1. If `consul-server, StatefulSet` appears, it means your Consul server StatefulSet will be redeployed when you apply the updated Helm values.
 
-  If your Consul server statefulset needs to be redeployed, follow the same pattern for upgrades as
-  on other platforms by redeploying servers one by one. Refer to [Upgrading Consul](/consul/docs/upgrade) for more information.
-
-  If neither the server statefulset is not being redeployed, then you can continue with the Helm upgrade without any specific sequence to follow.
+  If your StatefulSet needs to be redeployed, follow the regular upgrade pattern by redeploying servers one by one. Refer to [Upgrading Consul](/consul/docs/upgrade) for more information.
 
 
-### Helm configuration changes
 
-If you make a change to your Helm values file, you need to perform a `helm upgrade` for those changes to take effect.
+## Upgrade Helm chart version
 
-1. List the available versions of the chart:
+Before apply your updated `values.yaml` file, you may need to update the version of your Consul Helm chart.
+
+1. List the available versions of the chart.
 
   ```shell-session
   $ helm search repo hashicorp/consul --versions
@@ -98,25 +96,16 @@ If you make a change to your Helm values file, you need to perform a `helm upgra
   ...
   ```
 
-1. Assume you want to upgrade to chart version `1.4.9` and Consul version `1.18.2`. You can do this by updating your `values.yaml` file to set the `global.image` value to the desired version:
+Different Consul versions have different Helm chart requirements.
 
-   <CodeBlockConfig filename="values.yaml" highlight="2">
-   ```yaml
-   global:
-     image: "registry.connect.redhat.com/hashicorp/consul:1.18.2-ubi"
-     ... # other values
-   ```
-   </CodeBlockConfig>
-
-1. Perform a `helm upgrade` and make sure that you specify the correct chart version - in this case `1.4.9`:
+1. Specify the chart version you in a `helm upgrade` command. The following example updates the Helm chart to version `1.4.9`.
 
    ```shell-session
    $ helm upgrade consul hashicorp/consul --namespace consul --version 1.4.9 --values /path/to/my/values.yaml
    ```
 
-~> Note: If you don't pass the `--version` flag when upgrading a Helm chart, Helm uses the most up-to-date version of the chart in its local cache, which may result in an unintended version upgrade.
+If you do not pass the `--version` flag when upgrading a Helm chart, Helm uses the most recent version of the chart in its local cache, which may result in an upgrade to an unintended version.
 
-### Upgrade Helm chart version
 
 You may wish to upgrade your Helm chart version to take advantage of new features and bug fixes, or because you want to upgrade your Consul version and it requires a certain Helm chart version.
 
@@ -155,10 +144,12 @@ You may wish to upgrade your Helm chart version to take advantage of new feature
 1. Check the changelog for any breaking changes from that version and any versions in between: [CHANGELOG.md](https://github.com/hashicorp/consul-k8s/blob/main/CHANGELOG.md). Then edit your `values.yaml` file to set the `global.image` value to the desired version. In this example, we are upgrading to chart version `1.5.6` and Consul version `1.19.1`:
 
    <CodeBlockConfig filename="values.yaml" highlight="2">
+   
    ```yaml
    global:
      image: "registry.connect.redhat.com/hashicorp/consul:1.19.1-ubi"
    ```
+
    </CodeBlockConfig>
 
 1. Upgrade by performing a `helm upgrade` with the `--version` flag set to the chart version you want to upgrade to:
@@ -188,7 +179,7 @@ You may wish to upgrade your Helm chart version to take advantage of new feature
   https://www.consul.io/docs/k8s/k8s-cli
   ```
 
-### Upgrade Consul version
+## Upgrade Consul version
 
 If a new version of Consul is released, you need to perform a Helm upgrade to update to the new version. Before you upgrade to a new version:
 
